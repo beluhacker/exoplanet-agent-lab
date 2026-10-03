@@ -1,0 +1,7 @@
+numpy
+scipy
+matplotlib
+anthropic
+fastapi
+uvicorn
+python-dotenv
