@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -27,6 +28,22 @@ from backend.lab_tools import RESULTS_DIR, DEFAULT_TARGET, _safe_id
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AGENT_CONFIG = REPO_ROOT / "omni.yaml"
 AGENT_NAME = "exoplanet_orchestrator"
+
+
+def _windows_unix_tools_dir():
+    """
+    Omnigent hands Claude Code the API key as the apiKeyHelper `printf %s <key>`.
+    On Windows that runs under cmd.exe, which has no printf, so the helper fails
+    and every request gets a 401. Git for Windows ships printf.exe in usr/bin.
+    """
+    if os.name != "nt" or shutil.which("printf"):
+        return None
+    candidates = []
+    git = shutil.which("git")
+    if git:
+        candidates.append(Path(git).resolve().parent.parent / "usr" / "bin")
+    candidates.append(Path(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "usr", "bin"))
+    return next((str(c) for c in candidates if (c / "printf.exe").exists()), None)
 
 
 def _free_port():
@@ -75,6 +92,9 @@ class OmnigentServer:
     def _spawn(self, name, args):
         # The runner resolves the `backend.*` tool callables, so the repo must be importable
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO_ROOT), os.environ.get("PYTHONPATH")]))}
+        unix_tools = _windows_unix_tools_dir()
+        if unix_tools:
+            env["PATH"] = os.pathsep.join([env.get("PATH", ""), unix_tools])
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log = open(self.log_dir / f"omnigent_{name}.log", "wb")
         self._logs.append(log)
@@ -148,37 +168,150 @@ def _load_experiments(run_id):
     return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(run_dir.glob("exp_*.json"))]
 
 
+def _blocks_text(blocks):
+    if isinstance(blocks, str):
+        return blocks
+    if isinstance(blocks, list):
+        return "".join(b.get("text", "") for b in blocks if isinstance(b, dict))
+    return ""
+
+
 async def _assistant_messages(client, session_id):
     items = await client.sessions.list_items(session_id, limit=1000)
-    texts = []
-    for item in items:
-        if item.get("type") != "message" or item.get("role") != "assistant":
-            continue
-        content = item.get("content")
-        if isinstance(content, str):
-            texts.append(content)
-        elif isinstance(content, list):
-            texts.append("".join(b.get("text", "") for b in content if isinstance(b, dict)))
+    texts = [
+        _blocks_text(item.get("content"))
+        for item in items
+        if item.get("type") == "message" and item.get("role") == "assistant"
+    ]
     return [t for t in texts if t.strip()]
 
 
-async def _ask_orchestrator(server, prompt, timeout_s=3600, idle_grace_checks=3):
+AGENT_LABELS = {
+    AGENT_NAME: "ORCHESTRATOR",
+    "literature_insight": "LITERATURE",
+    "experiment_runner": "EXPERIMENT",
+    "analysis_agent": "ANALYSIS",
+}
+
+
+def _shorten(text, limit=240):
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _format_arguments(arguments):
+    try:
+        args = json.loads(arguments) if isinstance(arguments, str) else arguments
+    except json.JSONDecodeError:
+        return _shorten(arguments, 120)
+    if not isinstance(args, dict):
+        return _shorten(args, 120)
+    return ", ".join(f"{k}={_shorten(v, 60)}" for k, v in args.items())
+
+
+class ActivityFeed:
+    """
+    Turns new items of the orchestrator session and its sub-agent sessions
+    (tasks, thinking, tool calls, tool results, messages) into dashboard events.
+    """
+
+    def __init__(self, client, root_id, on_event):
+        self.client = client
+        self.on_event = on_event
+        self._sessions = {root_id: {"agent": "ORCHESTRATOR", "title": None, "busy": True, "root": True}}
+        self._cursors = {}
+        self._tool_names = {}
+
+    def emit(self, agent, kind, message, title=None, detail=None):
+        if self.on_event is None:
+            return
+        self.on_event({
+            "time": time.strftime("%H:%M:%S"),
+            "agent": agent,
+            "kind": kind,
+            "title": title,
+            "message": message,
+            "detail": detail if detail and detail != message else None,
+        })
+
+    async def poll(self):
+        if self.on_event is None:
+            return
+        root_id = next(iter(self._sessions))
+        for child in await self.client.sessions.child_sessions_tree(root_id):
+            name = child.get("agent_name") or child.get("tool") or "agent"
+            known = self._sessions.get(child["id"])
+            if known is None:
+                known = self._sessions[child["id"]] = {
+                    "agent": AGENT_LABELS.get(name, name.upper()), "title": child.get("title"), "busy": False, "root": False,
+                }
+                self.emit(known["agent"], "status", f"{name} started", known["title"])
+            busy = bool(child.get("busy"))
+            if known["busy"] and not busy:
+                self.emit(known["agent"], "status", f"{name} finished", known["title"])
+            known["busy"] = busy
+
+        for session_id, info in self._sessions.items():
+            items = await self.client.sessions.list_items(session_id, limit=1000, after=self._cursors.get(session_id))
+            for item in items:
+                self._cursors[session_id] = item["id"]
+                self._emit_item(item, info)
+
+    def _emit_item(self, item, info):
+        agent, title = info["agent"], info["title"]
+        kind = item.get("type")
+        if kind == "message":
+            text = _blocks_text(item.get("content")).strip()
+            if not text:
+                return
+            if item.get("role") == "assistant":
+                self.emit(agent, "message", _shorten(text), title, text)
+            elif not info["root"]:
+                # The orchestrator's instructions to a sub-agent
+                self.emit(agent, "task", _shorten(text), title, text)
+        elif kind == "reasoning":
+            text = (_blocks_text(item.get("summary")) or _blocks_text(item.get("content"))).strip()
+            if text:
+                self.emit(agent, "thinking", _shorten(text), title, text)
+        elif kind == "function_call":
+            name = item.get("name", "tool")
+            self._tool_names[item.get("call_id")] = name
+            arguments = item.get("arguments")
+            self.emit(agent, "tool_call", f"{name}({_format_arguments(arguments)})", title,
+                      arguments if isinstance(arguments, str) else json.dumps(arguments, indent=2))
+        elif kind == "function_call_output":
+            name = self._tool_names.get(item.get("call_id"), "tool")
+            output = item.get("output")
+            output = output if isinstance(output, str) else _blocks_text(output) or json.dumps(output)
+            self.emit(agent, "tool_result", f"{name} → {_shorten(output, 160)}", title, output[:8000])
+        elif kind == "error":
+            self.emit(agent, "error", _shorten(item.get("message", "error")), title)
+
+
+async def _ask_orchestrator(server, prompt, timeout_s=3600, idle_grace_checks=3, on_event=None):
     """
     Drive the async orchestrator until it posts its final JSON summary.
 
     The orchestrator ends its turn after every sub-agent dispatch and is woken
     by the inbox when the sub-agent finishes, so one run spans many turns.
+    Meanwhile every agent's activity is forwarded to ``on_event``.
     """
     session = Session.from_dict(server.create_session(AGENT_NAME))
-    async with OmnigentClient(base_url=server.base_url) as client:
+    # The first message blocks until the host has spawned a runner (the server waits
+    # up to 10s + 30s for that), so the client's 30s default timeout is too short
+    async with OmnigentClient(base_url=server.base_url, timeout=120.0) as client:
+        feed = ActivityFeed(client, session.id, on_event)
         chat = SessionsChat(namespace=client.sessions, files_uploader=None, files_getter=None, session=session)
+        feed.emit("SYSTEM", "status", "Discovery request sent to the orchestrator")
         await chat.query(prompt)
 
         deadline = time.monotonic() + timeout_s
         idle_checks = 0
         while time.monotonic() < deadline:
+            await feed.poll()
             messages = await _assistant_messages(client, session.id)
             if messages and _extract_json_block(messages[-1]):
+                await feed.poll()
                 return messages[-1]
             await chat.refresh()
             if chat.status == "failed":
@@ -191,18 +324,25 @@ async def _ask_orchestrator(server, prompt, timeout_s=3600, idle_grace_checks=3)
                 await asyncio.sleep(5)
             else:
                 idle_checks = 0
-                await chat.await_turn(timeout=60)
+                # Short wait so the activity feed stays close to live
+                await chat.await_turn(timeout=3)
 
+        await feed.poll()
         messages = await _assistant_messages(client, session.id)
         return messages[-1] if messages else ""
 
 
-def run_discovery(target_file=DEFAULT_TARGET, max_iterations=3, run_id=None):
+def new_run_id():
+    return f"run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
+
+def run_discovery(target_file=DEFAULT_TARGET, max_iterations=3, run_id=None, on_event=None):
     """
     Run the Omnigent discovery loop (literature → experiment → analysis) and
     return a dashboard payload: report, hypotheses, logs, spectrum, iterations.
+    ``on_event`` receives every agent step while the loop runs (see ActivityFeed).
     """
-    run_id = _safe_id(run_id or f"run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}")
+    run_id = _safe_id(run_id or new_run_id())
     prompt = (
         "Run the exoplanet discovery loop.\n"
         f"run_id: {run_id}\n"
@@ -210,8 +350,11 @@ def run_discovery(target_file=DEFAULT_TARGET, max_iterations=3, run_id=None):
         f"max_iterations: {max_iterations}"
     )
 
+    if on_event is not None:
+        on_event({"time": time.strftime("%H:%M:%S"), "agent": "SYSTEM", "kind": "status", "title": None,
+                  "message": f"Starting Omnigent server and agent host · {run_id}", "detail": None})
     with OmnigentServer(log_dir=RESULTS_DIR / run_id) as server:
-        answer = asyncio.run(_ask_orchestrator(server, prompt))
+        answer = asyncio.run(_ask_orchestrator(server, prompt, on_event=on_event))
 
     (RESULTS_DIR / run_id).mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / run_id / "orchestrator_answer.md").write_text(answer, encoding="utf-8")

@@ -41,7 +41,51 @@ type LogLine = {
   time: string;
   agent: string;
   message: string;
-  tone?: "default" | "signal" | "success" | "warning";
+  tone?: "default" | "signal" | "success" | "warning" | "thinking";
+  title?: string | null;
+  detail?: string | null;
+};
+
+type AgentEvent = {
+  seq: number;
+  time: string;
+  agent: string;
+  kind: "status" | "task" | "thinking" | "message" | "tool_call" | "tool_result" | "error";
+  title: string | null;
+  message: string;
+  detail: string | null;
+};
+
+type AgentState = {
+  busy: boolean;
+  title: string | null;
+  activity: string;
+  time: string;
+};
+
+const API_BASE = "http://127.0.0.1:8000";
+
+const labAgents = [
+  { key: "ORCHESTRATOR", role: "Coordinates the loop" },
+  { key: "LITERATURE", role: "Literature & hypothesis" },
+  { key: "EXPERIMENT", role: "Forward-model experiment" },
+  { key: "ANALYSIS", role: "Learns from results" },
+];
+
+const kindTone: Record<AgentEvent["kind"], NonNullable<LogLine["tone"]>> = {
+  status: "signal",
+  task: "signal",
+  thinking: "thinking",
+  message: "default",
+  tool_call: "default",
+  tool_result: "success",
+  error: "warning",
+};
+
+const kindPrefix: Partial<Record<AgentEvent["kind"], string>> = {
+  task: "Task · ",
+  thinking: "Thinking · ",
+  tool_call: "→ ",
 };
 
 type Hypothesis = {
@@ -82,17 +126,6 @@ const initialLogs: LogLine[] = [
   { time: "22:14:03", agent: "ATMOSPHERE", message: "Equilibrium chemistry prior initialized: C/O ∈ [0.1, 1.2]" },
   { time: "22:14:04", agent: "SIMULATOR", message: "Radiative-transfer grid warm · 2,048 models indexed", tone: "success" },
   { time: "22:14:05", agent: "ANALYSIS", message: "Degeneracy monitor ready. Awaiting discovery loop." },
-];
-
-const runningSequence: Omit<LogLine, "time">[] = [
-  { agent: "ORCHESTRATOR", message: "Dispatching parallel atmospheric hypotheses…", tone: "signal" },
-  { agent: "RETRIEVAL", message: "Iteration 01 · χ² 1.84 · refining molecular abundances" },
-  { agent: "SIMULATOR", message: "CO₂ feature recovered at 4.3 μm · 6.1σ", tone: "success" },
-  { agent: "CLOUD", message: "Testing gray cloud deck against high-metallicity branch" },
-  { agent: "RETRIEVAL", message: "Iteration 02 · χ² 1.31 · posterior contraction 18%" },
-  { agent: "ANALYSIS", message: "Bimodality detected in metallicity–cloud pressure plane", tone: "warning" },
-  { agent: "SIMULATOR", message: "Running discriminant models near 2.8 μm…" },
-  { agent: "ORCHESTRATOR", message: "Evidence convergence reached · Δln Z < 0.08", tone: "success" },
 ];
 
 const initialHypotheses: Hypothesis[] = [
@@ -152,6 +185,7 @@ function Dashboard() {
   const [report, setReport] = useState(fallbackReport);
   const [hypotheses, setHypotheses] = useState(initialHypotheses);
   const [iteration, setIteration] = useState(12);
+  const [agents, setAgents] = useState<Record<string, AgentState>>({});
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -163,35 +197,71 @@ function Dashboard() {
     return (total / spectrum.length).toFixed(1);
   }, [spectrum]);
 
+  function applyEvents(events: AgentEvent[]) {
+    if (!events.length) return;
+    setLogs((current) => [
+      ...current,
+      ...events.map((event) => ({
+        time: event.time,
+        agent: event.agent,
+        message: `${kindPrefix[event.kind] ?? ""}${event.message}`,
+        tone: kindTone[event.kind],
+        title: event.title,
+        detail: event.detail,
+      })),
+    ]);
+    setAgents((current) => {
+      const next = { ...current };
+      for (const event of events) {
+        const previous = next[event.agent];
+        const busy = event.kind === "status" ? !event.message.endsWith("finished") : (previous?.busy ?? true);
+        next[event.agent] = { busy, title: event.title ?? previous?.title ?? null, activity: event.message, time: event.time };
+      }
+      return next;
+    });
+    for (const event of events) {
+      const match = event.title?.match(/-(\d+)$/);
+      if (match) setIteration(Number(match[1]));
+    }
+  }
+
   async function runDiscovery() {
     if (isRunning) return;
     setIsRunning(true);
     setStatus("running");
+    setAgents({});
+    setIteration(0);
     setLogs((current) => [
       ...current,
-      { time: nowTime(), agent: "SYSTEM", message: "New discovery loop initiated · POST /run-discovery", tone: "signal" },
+      { time: nowTime(), agent: "SYSTEM", message: "New discovery loop initiated · POST /runs", tone: "signal" },
     ]);
 
-    let cursor = 0;
-    const timer = window.setInterval(() => {
-      const next = runningSequence[cursor];
-      if (!next) return;
-      setLogs((current) => [...current, { ...next, time: nowTime() }]);
-      setIteration((current) => current + 1);
-      cursor += 1;
-    }, 620);
-
     try {
-      const response = await fetch("http://127.0.0.1:8000/run-discovery", { method: "POST" });
-      if (!response.ok) throw new Error(`Discovery service returned ${response.status}`);
-      const payload = (await response.json()) as Record<string, unknown>;
+      const started = await fetch(`${API_BASE}/runs`, { method: "POST" });
+      if (!started.ok) throw new Error(`Discovery service returned ${started.status}`);
+      const { run_id: runId } = (await started.json()) as { run_id: string };
+
+      let after = 0;
+      let payload: Record<string, unknown> | null = null;
+      for (;;) {
+        const response = await fetch(`${API_BASE}/runs/${runId}?after=${after}`);
+        if (!response.ok) throw new Error(`Discovery service returned ${response.status}`);
+        const run = (await response.json()) as { status: string; events: AgentEvent[]; result: Record<string, unknown> | null; error: string | null };
+        applyEvents(run.events);
+        after += run.events.length;
+        if (run.status === "error") throw new Error(run.error ?? "Discovery loop failed");
+        if (run.status === "complete") {
+          payload = run.result;
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      }
+      if (!payload) throw new Error("Discovery loop returned no result");
+
+      setAgents((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, { ...value, busy: false }])));
       const nextSpectrum = safeSpectrum(payload["spectrum"] ?? payload["transmission_spectrum"] ?? payload["data"]);
       if (nextSpectrum) setSpectrum(nextSpectrum);
       if (typeof payload["report"] === "string") setReport(payload["report"]);
-      if (Array.isArray(payload["logs"])) {
-        const apiLogs = payload["logs"].filter((line): line is string => typeof line === "string");
-        setLogs((current) => [...current, ...apiLogs.map((message) => ({ time: nowTime(), agent: "AGENT", message }))]);
-      }
       if (Array.isArray(payload["hypotheses"])) {
         const parsed: Hypothesis[] = payload["hypotheses"].flatMap((item, index): Hypothesis[] => {
           if (!item || typeof item !== "object") return [];
@@ -210,7 +280,6 @@ function Dashboard() {
       const message = error instanceof Error ? error.message : "Discovery service unavailable";
       setLogs((current) => [...current, { time: nowTime(), agent: "SYSTEM", message: `${message}. Retaining the latest local analysis.`, tone: "warning" }]);
     } finally {
-      window.clearInterval(timer);
       setIsRunning(false);
     }
   }
@@ -311,18 +380,46 @@ function Dashboard() {
             </Panel>
 
             <Panel>
+              <PanelHeader icon={<Sparkles />} title="Agent Activity" eyebrow="What each agent is working on">
+                <span className="font-mono text-[10px] uppercase text-muted-foreground">Live</span>
+              </PanelHeader>
+              <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
+                {labAgents.map(({ key, role }) => {
+                  const state = agents[key];
+                  const working = isRunning && Boolean(state?.busy);
+                  return (
+                    <div key={key} className="min-w-0 bg-card px-4 py-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-[10px] font-semibold uppercase text-coral">{key}</span>
+                        <span className={cn("flex items-center gap-1.5 font-mono text-[9px] uppercase", working ? "text-success" : "text-muted-foreground")}>
+                          <span className={cn("size-1.5 rounded-full", working ? "animate-pulse bg-success" : "bg-muted-foreground")} />
+                          {working ? "Working" : state ? "Idle" : "Waiting"}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 font-mono text-[9px] uppercase text-muted-foreground">{state?.title ?? role}</p>
+                      <p className="mt-2 line-clamp-3 break-words text-xs leading-5 text-foreground" title={state?.activity}>
+                        {state?.activity ?? "No activity yet"}
+                      </p>
+                      {state && <p className="mt-1 font-mono text-[9px] text-muted-foreground">{state.time}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            </Panel>
+
+            <Panel>
               <PanelHeader icon={<TerminalSquare />} title="Agent Log Stream" eyebrow={`Iteration ${iteration.toString().padStart(2, "0")}`}>
                 <div className="flex items-center gap-2 font-mono text-[10px] uppercase text-muted-foreground">
                   <span className={cn("size-1.5 rounded-full", isRunning ? "animate-pulse bg-success" : "bg-muted-foreground")} />
                   {isRunning ? "Streaming" : "Standby"}
                 </div>
               </PanelHeader>
-              <div className="h-64 overflow-y-auto bg-terminal px-4 py-3 font-mono text-[11px] leading-6 sm:px-5" aria-live="polite">
+              <div className="h-96 overflow-y-auto bg-terminal px-4 py-3 font-mono text-[11px] leading-6 sm:px-5" aria-live="polite">
                 {logs.map((line, index) => (
                   <div key={`${line.time}-${index}`} className="grid grid-cols-[64px_88px_1fr] gap-2 border-b border-border/40 py-0.5 last:border-0">
                     <span className="text-muted-foreground">{line.time}</span>
                     <span className={cn("truncate", logTone(line.tone))}>{line.agent}</span>
-                    <span className="min-w-0 break-words text-terminal-foreground">{line.message}</span>
+                    <LogMessage line={line} />
                   </div>
                 ))}
                 <div ref={logEndRef} />
@@ -467,10 +564,30 @@ function ContextCell({ label, value }: { label: string; value: string }) {
   return <div className="bg-card px-4 py-3"><dt className="font-mono text-[9px] uppercase text-muted-foreground">{label}</dt><dd className="mt-1 text-xs text-foreground">{value}</dd></div>;
 }
 
+function LogMessage({ line }: { line: LogLine }) {
+  const text = (
+    <>
+      {line.title && <span className="mr-1.5 text-muted-foreground">[{line.title}]</span>}
+      <span className={cn(line.tone === "thinking" ? "italic text-muted-foreground" : "text-terminal-foreground")}>{line.message}</span>
+    </>
+  );
+  if (!line.detail) return <span className="min-w-0 break-words">{text}</span>;
+  return (
+    <details className="group min-w-0 break-words">
+      <summary className="cursor-pointer list-none marker:hidden">
+        {text}
+        <span className="ml-1.5 text-muted-foreground group-open:hidden">[+]</span>
+      </summary>
+      <pre className="mt-1 mb-1 max-h-72 overflow-auto whitespace-pre-wrap border-l border-border-strong pl-3 text-[10px] leading-5 text-muted-foreground">{line.detail}</pre>
+    </details>
+  );
+}
+
 function logTone(tone?: LogLine["tone"]) {
   if (tone === "signal") return "text-primary";
   if (tone === "success") return "text-success";
   if (tone === "warning") return "text-warning";
+  if (tone === "thinking") return "text-muted-foreground";
   return "text-coral";
 }
 

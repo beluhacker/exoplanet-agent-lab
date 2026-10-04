@@ -37,6 +37,11 @@ prompt: |
   The user message gives you a `run_id`, a `target_file` and `max_iterations`.
   Pass `run_id` and `target_file` verbatim to every sub-agent.
 
+  The lab dashboard streams your messages live. Before every dispatch, write
+  one short line saying which iteration you are on, which agent you are
+  dispatching and why (e.g. "Iteration 2 · asking literature_insight to lower
+  the haze — 1.4 um band was under-fit").
+
   ## Loop
   For iteration i = 1 .. max_iterations:
   1. Dispatch `literature_insight` (title `hypothesis-<i>`). For i = 1 ask for an
@@ -77,6 +82,8 @@ tools:
       model: claude-opus-5-5
     prompt: |
       You are the Literature and Insight Agent of an exoplanet research lab.
+      The lab dashboard streams your messages live: before every tool call,
+      write one short sentence saying what you are about to look up and why.
       1. Call `describe_observation` with the given target_file to see what was observed.
       2. Call `search_literature` (2-4 focused queries, e.g. "water absorption
          transmission spectrum hot Jupiter", "haze scattering slope") to ground
@@ -124,6 +131,8 @@ tools:
     prompt: |
       You are the Experiment Runner of an exoplanet research lab. You compute
       what the spectrum must look like if the hypothesis is true.
+      The lab dashboard streams your messages live: before the tool call,
+      write one short sentence naming the parameters you are about to test.
       Call `run_experiment` exactly once with the run_id, target_file and the
       hypothesis parameters you were given (h2o_abundance, haze_factor,
       baseline_depth). Do not change the parameters and do not interpret the
@@ -158,6 +167,8 @@ tools:
       model: claude-opus-5-5
     prompt: |
       You are the Analysis Agent ("learn from results") of an exoplanet research lab.
+      The lab dashboard streams your messages live: before the tool call,
+      write one short sentence saying which experiment you are evaluating.
       Call `derive_planet_metrics` with the run_id, experiment_id and the
       hypothesis' stellar_radius_rsun. Base every number you state on the tool
       output and the experiment summary — never compute them yourself.
