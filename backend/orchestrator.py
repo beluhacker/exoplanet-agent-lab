@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from omnigent_client import OmnigentClient, SessionsChat
 from omnigent_client._sessions import Session
 
-from backend.lab_tools import RESULTS_DIR, DEFAULT_TARGET, _safe_id
+from backend.lab_tools import RESULTS_DIR, DEFAULT_TARGET, _load_target, _safe_id, describe_observation
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AGENT_CONFIG = REPO_ROOT / "omni.yaml"
@@ -163,9 +163,74 @@ def _extract_json_block(text):
     return {}
 
 
+def _load_json_files(run_id, pattern):
+    """Load results/<run_id>/<pattern>, skipping files a tool is still writing."""
+    loaded = []
+    for path in sorted((RESULTS_DIR / _safe_id(run_id)).glob(pattern)):
+        try:
+            loaded.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return loaded
+
+
 def _load_experiments(run_id):
-    run_dir = RESULTS_DIR / _safe_id(run_id)
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(run_dir.glob("exp_*.json"))]
+    return _load_json_files(run_id, "exp_*.json")
+
+
+PPM = 1e6
+
+
+def load_observation(target_file=DEFAULT_TARGET):
+    """The observed spectrum and its summary statistics (depths in ppm) for the dashboard."""
+    summary = json.loads(describe_observation(target_file))
+    wavelengths, depth = _load_target(target_file)
+    return {
+        "target_file": target_file,
+        "n_points": summary["n_points"],
+        "wavelength_range_um": summary["wavelength_range_um"],
+        "median_depth_ppm": summary["median_transit_depth"] * PPM,
+        "min_depth_ppm": summary["min_transit_depth"] * PPM,
+        "max_depth_ppm": summary["max_transit_depth"] * PPM,
+        "noise_ppm": summary["per_point_noise_estimate"] * PPM,
+        "stellar_parameters": summary["stellar_parameters"],
+        "points": [{"wavelength": float(w), "target": float(d) * PPM} for w, d in zip(wavelengths, depth)],
+    }
+
+
+def run_progress(run_id, best_experiment_id=None):
+    """
+    Everything the experiment runner and analysis agent have produced so far:
+    one row per experiment, the best-fitting spectrum (ppm) and the analysis
+    metrics of every evaluated experiment.
+    """
+    experiments = _load_experiments(run_id)
+    iterations = [
+        {
+            "iteration": i,
+            "experiment_id": exp["experiment_id"],
+            **exp["hypothesis"],
+            "rmse": exp["rmse"],
+            "reduced_chi2": exp["reduced_chi2"],
+            "band_residuals": exp["band_residuals"],
+        }
+        for i, exp in enumerate(experiments, start=1)
+    ]
+    best = next((e for e in experiments if e["experiment_id"] == best_experiment_id), None)
+    if best is None and experiments:
+        best = min(experiments, key=lambda e: e["reduced_chi2"])
+    spectrum = []
+    if best is not None:
+        spectrum = [
+            {"wavelength": w, "target": o * PPM, "fit": m * PPM, "uncertainty": best["noise_sigma"] * PPM}
+            for w, o, m in zip(best["wavelength_um"], best["observed_depth"], best["model_depth"])
+        ]
+    return {
+        "iterations": iterations,
+        "best_experiment_id": best["experiment_id"] if best else None,
+        "spectrum": spectrum,
+        "metrics": {m["experiment_id"]: m for m in _load_json_files(run_id, "metrics_*.json")},
+    }
 
 
 def _blocks_text(blocks):
@@ -360,28 +425,6 @@ def run_discovery(target_file=DEFAULT_TARGET, max_iterations=3, run_id=None, on_
     (RESULTS_DIR / run_id / "orchestrator_answer.md").write_text(answer, encoding="utf-8")
 
     summary = _extract_json_block(answer)
-    experiments = _load_experiments(run_id)
-    iterations = [
-        {
-            "iteration": i,
-            "experiment_id": exp["experiment_id"],
-            **exp["hypothesis"],
-            "rmse": exp["rmse"],
-            "reduced_chi2": exp["reduced_chi2"],
-        }
-        for i, exp in enumerate(experiments, start=1)
-    ]
-
-    best = next((e for e in experiments if e["experiment_id"] == summary.get("best_experiment_id")), None)
-    if best is None and experiments:
-        best = min(experiments, key=lambda e: e["reduced_chi2"])
-    spectrum = []
-    if best is not None:
-        spectrum = [
-            {"wavelength": w, "target": o, "fit": m, "uncertainty": best["noise_sigma"]}
-            for w, o, m in zip(best["wavelength_um"], best["observed_depth"], best["model_depth"])
-        ]
-
     return {
         "status": "success",
         "run_id": run_id,
@@ -389,8 +432,7 @@ def run_discovery(target_file=DEFAULT_TARGET, max_iterations=3, run_id=None, on_
         "report": summary.get("report") or answer,
         "hypotheses": summary.get("hypotheses", []),
         "logs": summary.get("logs", []),
-        "iterations": iterations,
-        "spectrum": spectrum,
+        **run_progress(run_id, summary.get("best_experiment_id")),
     }
 
 

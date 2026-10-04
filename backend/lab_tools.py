@@ -194,7 +194,7 @@ def derive_planet_metrics(run_id: str, experiment_id: str, stellar_radius_rsun: 
     rp_rs = float(np.sqrt(baseline_depth))
     rp_earth = rp_rs * float(stellar_radius_rsun) * R_SUN_IN_R_EARTH
 
-    return json.dumps({
+    metrics = {
         "run_id": raw["run_id"],
         "experiment_id": raw["experiment_id"],
         "hypothesis": raw["hypothesis"],
@@ -219,4 +219,7 @@ def derive_planet_metrics(run_id: str, experiment_id: str, stellar_radius_rsun: 
             "radius_earth": round(rp_earth, 2),
             "radius_jupiter": round(rp_earth / R_JUP_IN_R_EARTH, 3),
         },
-    }, indent=2)
+    }
+    # Stored next to the experiment so the dashboard can show it while the loop runs
+    (path.parent / f"metrics_{raw['experiment_id']}.json").write_text(json.dumps(metrics), encoding="utf-8")
+    return json.dumps(metrics, indent=2)

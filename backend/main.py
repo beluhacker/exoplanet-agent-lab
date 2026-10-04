@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import threading
 
-from backend.orchestrator import new_run_id, run_discovery
+from backend.orchestrator import load_observation, new_run_id, run_discovery, run_progress
 
 app = FastAPI(
     title="Exoplanet Agent Lab API",
@@ -38,6 +38,12 @@ def read_root():
         "status": "online",
         "message": "Welcome to the Exoplanet Agent Lab API. Use POST /runs to start the Omnigent discovery loop and GET /runs/{run_id} to follow it."
     }
+
+@app.get("/observation")
+def get_observation(target_file: str = "data/target_spectrum.csv"):
+    """The observed transmission spectrum (ppm) and its summary statistics."""
+    _require_target(target_file)
+    return load_observation(target_file)
 
 @app.post("/run-discovery")
 def trigger_discovery(max_iterations: int = 3, target_file: str = "data/target_spectrum.csv"):
@@ -83,20 +89,22 @@ def start_run(max_iterations: int = 3, target_file: str = "data/target_spectrum.
 @app.get("/runs/{run_id}")
 def get_run(run_id: str, after: int = 0):
     """
-    Returns the run's status, the agent events with seq >= after, and the
-    final payload (same shape as /run-discovery) once the loop has finished.
+    Returns the run's status, the agent events with seq >= after, the
+    experiments and analysis metrics produced so far, and the final payload
+    (same shape as /run-discovery) once the loop has finished.
     """
     with _runs_lock:
         run = _runs.get(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail=f"Unknown run {run_id}")
-        return {
+        snapshot = {
             "run_id": run_id,
             "status": run["status"],
             "events": run["events"][after:],
             "result": run["result"],
             "error": run["error"],
         }
+    return {**snapshot, "progress": run_progress(run_id)}
 
 if __name__ == "__main__":
     import uvicorn

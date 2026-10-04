@@ -15,7 +15,6 @@ import {
   Activity,
   Atom,
   CheckCircle2,
-  ChevronDown,
   CircleAlert,
   FlaskConical,
   Orbit,
@@ -24,6 +23,7 @@ import {
   RefreshCw,
   Satellite,
   Sparkles,
+  Table2,
   TerminalSquare,
 } from "lucide-react";
 
@@ -33,8 +33,46 @@ import { cn } from "@/lib/utils";
 type SpectrumPoint = {
   wavelength: number;
   target: number;
-  fit: number;
+  fit?: number;
   uncertainty?: number;
+};
+
+type Observation = {
+  target_file: string;
+  n_points: number;
+  wavelength_range_um: [number, number];
+  median_depth_ppm: number;
+  min_depth_ppm: number;
+  max_depth_ppm: number;
+  noise_ppm: number;
+  stellar_parameters: string;
+  points: SpectrumPoint[];
+};
+
+type IterationRow = {
+  iteration: number;
+  experiment_id: string;
+  h2o_abundance: number;
+  haze_factor: number;
+  baseline_depth: number;
+  rmse: number;
+  reduced_chi2: number;
+};
+
+type PlanetMetrics = {
+  experiment_id: string;
+  assumed_stellar_radius_rsun: number;
+  transit_snr: number;
+  atmosphere: { detection_significance_sigma: number; delta_chi2_vs_flat: number };
+  goodness_of_fit: { reduced_chi2: number; p_value: number };
+  planet: { rp_over_rstar: number; radius_earth: number; radius_jupiter: number };
+};
+
+type Progress = {
+  iterations: IterationRow[];
+  best_experiment_id: string | null;
+  spectrum: SpectrumPoint[];
+  metrics: Record<string, PlanetMetrics>;
 };
 
 type LogLine = {
@@ -63,6 +101,20 @@ type AgentState = {
   time: string;
 };
 
+type Hypothesis = {
+  label: string;
+  detail: string;
+  score: number;
+  tone: "primary" | "coral" | "lime";
+};
+
+type Verdict = {
+  title: string | null;
+  text: string;
+};
+
+type RunStatus = "ready" | "running" | "complete" | "error";
+
 const API_BASE = "http://127.0.0.1:8000";
 
 const labAgents = [
@@ -88,61 +140,6 @@ const kindPrefix: Partial<Record<AgentEvent["kind"], string>> = {
   tool_call: "→ ",
 };
 
-type Hypothesis = {
-  label: string;
-  detail: string;
-  score: number;
-  tone: "primary" | "coral" | "lime";
-};
-
-const initialSpectrum: SpectrumPoint[] = [
-  { wavelength: 0.62, target: 14621, fit: 14618, uncertainty: 13 },
-  { wavelength: 0.74, target: 14646, fit: 14634, uncertainty: 12 },
-  { wavelength: 0.86, target: 14691, fit: 14680, uncertainty: 13 },
-  { wavelength: 0.98, target: 14728, fit: 14722, uncertainty: 11 },
-  { wavelength: 1.1, target: 14705, fit: 14715, uncertainty: 12 },
-  { wavelength: 1.22, target: 14744, fit: 14739, uncertainty: 11 },
-  { wavelength: 1.34, target: 14818, fit: 14807, uncertainty: 12 },
-  { wavelength: 1.42, target: 14912, fit: 14891, uncertainty: 14 },
-  { wavelength: 1.52, target: 14828, fit: 14839, uncertainty: 12 },
-  { wavelength: 1.66, target: 14764, fit: 14770, uncertainty: 11 },
-  { wavelength: 1.82, target: 14731, fit: 14734, uncertainty: 13 },
-  { wavelength: 2.02, target: 14769, fit: 14758, uncertainty: 14 },
-  { wavelength: 2.24, target: 14822, fit: 14812, uncertainty: 13 },
-  { wavelength: 2.48, target: 14874, fit: 14865, uncertainty: 15 },
-  { wavelength: 2.72, target: 14831, fit: 14841, uncertainty: 14 },
-  { wavelength: 3.02, target: 14782, fit: 14793, uncertainty: 15 },
-  { wavelength: 3.34, target: 14844, fit: 14834, uncertainty: 14 },
-  { wavelength: 3.62, target: 14936, fit: 14918, uncertainty: 16 },
-  { wavelength: 3.92, target: 14852, fit: 14866, uncertainty: 15 },
-  { wavelength: 4.28, target: 14794, fit: 14802, uncertainty: 17 },
-  { wavelength: 4.64, target: 14848, fit: 14839, uncertainty: 18 },
-  { wavelength: 4.92, target: 14818, fit: 14823, uncertainty: 18 },
-];
-
-const initialLogs: LogLine[] = [
-  { time: "22:14:02", agent: "ORCHESTRATOR", message: "Target WASP-39 b context restored · run 0842", tone: "signal" },
-  { time: "22:14:03", agent: "RETRIEVAL", message: "Loaded NIRSpec PRISM spectrum · 22 wavelength bins" },
-  { time: "22:14:03", agent: "ATMOSPHERE", message: "Equilibrium chemistry prior initialized: C/O ∈ [0.1, 1.2]" },
-  { time: "22:14:04", agent: "SIMULATOR", message: "Radiative-transfer grid warm · 2,048 models indexed", tone: "success" },
-  { time: "22:14:05", agent: "ANALYSIS", message: "Degeneracy monitor ready. Awaiting discovery loop." },
-];
-
-const initialHypotheses: Hypothesis[] = [
-  { label: "High metallicity", detail: "30× solar · clear limb", score: 0.82, tone: "primary" },
-  { label: "Cloudy atmosphere", detail: "10× solar · 3 mbar deck", score: 0.61, tone: "coral" },
-  { label: "High C/O ratio", detail: "C/O = 0.91 · reduced H₂O", score: 0.27, tone: "lime" },
-];
-
-const fallbackReport = `### Converged interpretation
-The spectrum favors a **metal-enriched atmosphere** with a resolved CO₂ feature and moderate H₂O absorption. The evidence does not support a carbon-rich composition.
-
-### Dominant degeneracy
-Cloud-top pressure remains coupled to metallicity. A high-altitude gray cloud deck can flatten the 1.4 μm H₂O feature while preserving the 4.3 μm CO₂ band.
-
-### Recommended observation
-Prioritize **2.7–3.1 μm coverage**. This region maximizes information gain between the leading clear and cloudy solutions.`;
-
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
@@ -161,41 +158,100 @@ function nowTime() {
   return new Date().toLocaleTimeString("en-GB", { hour12: false });
 }
 
-function safeSpectrum(value: unknown): SpectrumPoint[] | null {
-  if (!Array.isArray(value)) return null;
-  const parsed: SpectrumPoint[] = value
-    .flatMap((entry): SpectrumPoint[] => {
-      if (!entry || typeof entry !== "object") return [];
-      const item = entry as Record<string, unknown>;
-      const wavelength = Number(item["wavelength"] ?? item["x"]);
-      const target = Number(item["target"] ?? item["transit_depth"] ?? item["observed"]);
-      const fit = Number(item["fit"] ?? item["simulated"] ?? item["model"]);
-      if (![wavelength, target, fit].every(Number.isFinite)) return [];
-      const uncertainty = Number(item["uncertainty"]);
-      return [{ wavelength, target, fit, ...(Number.isFinite(uncertainty) ? { uncertainty } : {}) }];
-    });
-  return parsed.length > 2 ? parsed : null;
+function fmt(value: number | null | undefined, digits = 0) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function formatElapsed(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60).toString().padStart(2, "0");
+  const seconds = (total % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function parseHypotheses(value: unknown): Hypothesis[] {
+  if (!Array.isArray(value)) return [];
+  const tones: Hypothesis["tone"][] = ["primary", "coral", "lime"];
+  return value.flatMap((item, index): Hypothesis[] => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const raw = Number(row["score"]);
+    if (typeof row["label"] !== "string" || !Number.isFinite(raw)) return [];
+    // The orchestrator reports a 0–100 confidence
+    const score = Math.min(1, Math.max(0, raw > 1 ? raw / 100 : raw));
+    return [{ label: row["label"], detail: typeof row["detail"] === "string" ? row["detail"] : "", score, tone: tones[index % tones.length] ?? "primary" }];
+  });
 }
 
 function Dashboard() {
   const [isRunning, setIsRunning] = useState(false);
-  const [status, setStatus] = useState<"ready" | "running" | "complete" | "error">("ready");
-  const [logs, setLogs] = useState<LogLine[]>(initialLogs);
-  const [spectrum, setSpectrum] = useState(initialSpectrum);
-  const [report, setReport] = useState(fallbackReport);
-  const [hypotheses, setHypotheses] = useState(initialHypotheses);
-  const [iteration, setIteration] = useState(12);
+  const [status, setStatus] = useState<RunStatus>("ready");
+  const [observation, setObservation] = useState<Observation | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [logs, setLogs] = useState<LogLine[]>([]);
   const [agents, setAgents] = useState<Record<string, AgentState>>({});
+  const [report, setReport] = useState("");
+  const [hypotheses, setHypotheses] = useState<Hypothesis[]>([]);
+  const [verdict, setVerdict] = useState<Verdict | null>(null);
+  const [iteration, setIteration] = useState(0);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [finishedAt, setFinishedAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/observation`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Observation endpoint returned ${response.status}`);
+        return (await response.json()) as Observation;
+      })
+      .then((data) => {
+        if (!cancelled) setObservation(data);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "Backend unavailable";
+        setLogs((current) => [...current, { time: nowTime(), agent: "SYSTEM", message: `Could not load the observation · ${message}. Is the backend running on ${API_BASE}?`, tone: "warning" }]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isRunning) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isRunning]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [logs]);
 
+  const fitted = Boolean(progress?.spectrum.length);
+  const chartData: SpectrumPoint[] = fitted ? (progress?.spectrum ?? []) : (observation?.points ?? []);
+
   const residual = useMemo(() => {
-    const total = spectrum.reduce((sum, point) => sum + Math.abs(point.target - point.fit), 0);
-    return (total / spectrum.length).toFixed(1);
-  }, [spectrum]);
+    if (!progress?.spectrum.length) return null;
+    const total = progress.spectrum.reduce((sum, point) => sum + Math.abs(point.target - (point.fit ?? point.target)), 0);
+    return total / progress.spectrum.length;
+  }, [progress]);
+
+  const bestRow = progress?.iterations.find((row) => row.experiment_id === progress.best_experiment_id) ?? null;
+  const rankedExperiments = useMemo(() => [...(progress?.iterations ?? [])].sort((a, b) => a.reduced_chi2 - b.reduced_chi2), [progress]);
+  const metrics = useMemo(() => {
+    if (!progress) return null;
+    const best = progress.best_experiment_id ? progress.metrics[progress.best_experiment_id] : undefined;
+    if (best) return best;
+    const all = Object.values(progress.metrics);
+    return all[all.length - 1] ?? null;
+  }, [progress]);
+
+  const workingCount = labAgents.filter(({ key }) => isRunning && agents[key]?.busy).length;
+  const elapsed = startedAt ? formatElapsed((finishedAt ?? clock) - startedAt) : null;
 
   function applyEvents(events: AgentEvent[]) {
     if (!events.length) return;
@@ -222,6 +278,10 @@ function Dashboard() {
     for (const event of events) {
       const match = event.title?.match(/-(\d+)$/);
       if (match) setIteration(Number(match[1]));
+      if (event.agent === "ANALYSIS" && event.kind === "message") {
+        const found = (event.detail ?? event.message).match(/VERDICT:\s*(.+)/);
+        if (found?.[1]) setVerdict({ title: event.title, text: found[1].trim() });
+      }
     }
   }
 
@@ -231,24 +291,36 @@ function Dashboard() {
     setStatus("running");
     setAgents({});
     setIteration(0);
-    setLogs((current) => [
-      ...current,
-      { time: nowTime(), agent: "SYSTEM", message: "New discovery loop initiated · POST /runs", tone: "signal" },
-    ]);
+    setProgress(null);
+    setReport("");
+    setHypotheses([]);
+    setVerdict(null);
+    setRunId(null);
+    setStartedAt(Date.now());
+    setFinishedAt(null);
+    setLogs((current) => [...current, { time: nowTime(), agent: "SYSTEM", message: "New discovery loop initiated · POST /runs", tone: "signal" }]);
 
     try {
       const started = await fetch(`${API_BASE}/runs`, { method: "POST" });
       if (!started.ok) throw new Error(`Discovery service returned ${started.status}`);
-      const { run_id: runId } = (await started.json()) as { run_id: string };
+      const { run_id: newRunId } = (await started.json()) as { run_id: string };
+      setRunId(newRunId);
 
       let after = 0;
       let payload: Record<string, unknown> | null = null;
       for (;;) {
-        const response = await fetch(`${API_BASE}/runs/${runId}?after=${after}`);
+        const response = await fetch(`${API_BASE}/runs/${newRunId}?after=${after}`);
         if (!response.ok) throw new Error(`Discovery service returned ${response.status}`);
-        const run = (await response.json()) as { status: string; events: AgentEvent[]; result: Record<string, unknown> | null; error: string | null };
+        const run = (await response.json()) as {
+          status: string;
+          events: AgentEvent[];
+          progress: Progress;
+          result: Record<string, unknown> | null;
+          error: string | null;
+        };
         applyEvents(run.events);
         after += run.events.length;
+        setProgress(run.progress);
         if (run.status === "error") throw new Error(run.error ?? "Discovery loop failed");
         if (run.status === "complete") {
           payload = run.result;
@@ -258,31 +330,24 @@ function Dashboard() {
       }
       if (!payload) throw new Error("Discovery loop returned no result");
 
-      setAgents((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, { ...value, busy: false }])));
-      const nextSpectrum = safeSpectrum(payload["spectrum"] ?? payload["transmission_spectrum"] ?? payload["data"]);
-      if (nextSpectrum) setSpectrum(nextSpectrum);
+      setProgress(payload as unknown as Progress);
       if (typeof payload["report"] === "string") setReport(payload["report"]);
-      if (Array.isArray(payload["hypotheses"])) {
-        const parsed: Hypothesis[] = payload["hypotheses"].flatMap((item, index): Hypothesis[] => {
-          if (!item || typeof item !== "object") return [];
-          const row = item as Record<string, unknown>;
-          const score = Number(row["score"]);
-          if (typeof row["label"] !== "string" || !Number.isFinite(score)) return [];
-          const tones: Hypothesis["tone"][] = ["primary", "coral", "lime"];
-          return [{ label: row["label"], detail: typeof row["detail"] === "string" ? row["detail"] : "Retrieved solution", score, tone: tones[index % tones.length] ?? "primary" }];
-        });
-        if (parsed.length) setHypotheses(parsed);
-      }
+      setHypotheses(parseHypotheses(payload["hypotheses"]));
+      if (typeof payload["verdict"] === "string" && payload["verdict"]) setVerdict({ title: "final", text: payload["verdict"] });
       setStatus("complete");
       setLogs((current) => [...current, { time: nowTime(), agent: "SYSTEM", message: "Discovery loop complete · report synchronized", tone: "success" }]);
     } catch (error) {
       setStatus("error");
       const message = error instanceof Error ? error.message : "Discovery service unavailable";
-      setLogs((current) => [...current, { time: nowTime(), agent: "SYSTEM", message: `${message}. Retaining the latest local analysis.`, tone: "warning" }]);
+      setLogs((current) => [...current, { time: nowTime(), agent: "SYSTEM", message, tone: "warning" }]);
     } finally {
+      setAgents((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, { ...value, busy: false }])));
+      setFinishedAt(Date.now());
       setIsRunning(false);
     }
   }
+
+  const coverage = observation ? `${fmt(observation.wavelength_range_um[0], 1)}–${fmt(observation.wavelength_range_um[1], 1)}` : "—";
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -297,17 +362,17 @@ function Dashboard() {
                 <span className="font-display text-base font-semibold uppercase tracking-normal">Asterion</span>
                 <span className="hidden font-mono text-[10px] uppercase text-muted-foreground sm:inline">Autonomous Exoplanet Lab</span>
               </div>
-              <p className="truncate font-mono text-[10px] text-muted-foreground">OBS / WASP-39 b / NIRSpec PRISM</p>
+              <p className="truncate font-mono text-[10px] text-muted-foreground">OBS / {observation?.target_file ?? "loading…"}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 font-mono text-[10px] uppercase">
             <div className="hidden items-center gap-2 text-muted-foreground md:flex">
-              <span className="size-1.5 animate-pulse rounded-full bg-success" />
-              6 agents online
+              <span className={cn("size-1.5 rounded-full", workingCount ? "animate-pulse bg-success" : "bg-muted-foreground")} />
+              {workingCount}/{labAgents.length} agents working
             </div>
             <div className="border-l border-border pl-3 text-right">
-              <div className="text-foreground">Cycle 0842</div>
-              <div className="text-muted-foreground">Mission time 18:42:06</div>
+              <div className="text-foreground">{runId ?? "No run yet"}</div>
+              <div className="text-muted-foreground">{elapsed ? `Run time ${elapsed}` : "—"}</div>
             </div>
           </div>
         </div>
@@ -317,21 +382,25 @@ function Dashboard() {
         <section className="mb-5 grid gap-4 border-b border-border pb-5 lg:grid-cols-[1fr_auto] lg:items-end">
           <div>
             <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase text-primary">
-              <Radio className="size-3" /> Active observation
+              <Radio className="size-3" /> Observation
             </div>
-            <h1 className="font-display text-3xl font-semibold tracking-normal sm:text-4xl">WASP-39 b</h1>
+            <h1 className="font-display text-3xl font-semibold tracking-normal sm:text-4xl">Transmission spectrum</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Transmission spectroscopy retrieval · Hot Saturn · 215 pc · Sagittarius
+              {observation
+                ? `${observation.target_file} · ${observation.n_points} points · ${coverage} μm · stellar parameters ${observation.stellar_parameters.split(" ")[0]}`
+                : "Loading the observation from the backend…"}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3 lg:justify-end">
             <div className="hidden border-r border-border pr-4 text-right sm:block">
-              <p className="font-mono text-[10px] uppercase text-muted-foreground">Last convergence</p>
-              <p className="mt-1 font-mono text-sm text-foreground">Δln Z 0.08 / 5.2k evals</p>
+              <p className="font-mono text-[10px] uppercase text-muted-foreground">Best fit so far</p>
+              <p className="mt-1 font-mono text-sm text-foreground">
+                {bestRow ? `χ²ᵣ ${fmt(bestRow.reduced_chi2, 2)} · ${bestRow.experiment_id}` : "No experiment yet"}
+              </p>
             </div>
             <Button
               onClick={runDiscovery}
-              disabled={isRunning}
+              disabled={isRunning || !observation}
               size="lg"
               className="h-12 min-w-52 bg-primary px-5 font-mono text-xs font-semibold uppercase text-primary-foreground shadow-signal hover:bg-primary/90"
             >
@@ -344,44 +413,52 @@ function Dashboard() {
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(360px,0.8fr)]">
           <div className="space-y-4">
             <Panel className="overflow-hidden">
-              <PanelHeader icon={<Activity />} title="Transmission Spectrum" eyebrow="Target vs. forward model">
+              <PanelHeader
+                icon={<Activity />}
+                title="Transmission Spectrum"
+                eyebrow={fitted && progress?.best_experiment_id ? `Observed vs. best model · ${progress.best_experiment_id}` : "Observed · no model yet"}
+              >
                 <div className="flex items-center gap-4 font-mono text-[10px] text-muted-foreground">
-                  <LegendDot className="bg-primary" label="Target" />
-                  <LegendDot className="bg-coral" label="Simulated fit" />
+                  <LegendDot className="bg-primary" label="Observed" />
+                  {fitted && <LegendDot className="bg-coral" label="Best model" />}
                 </div>
               </PanelHeader>
               <div className="grid grid-cols-2 border-b border-border sm:grid-cols-4">
-                <Metric label="Mean depth" value="14,792" unit="ppm" />
-                <Metric label="Mean residual" value={residual} unit="ppm" />
-                <Metric label="Resolving power" value="R ≈ 100" />
-                <Metric label="Coverage" value="0.6–5.0" unit="μm" />
+                <Metric label="Median depth" value={fmt(observation?.median_depth_ppm)} unit="ppm" />
+                <Metric label="Noise σ" value={fmt(observation?.noise_ppm)} unit="ppm" />
+                <Metric label="Mean |residual|" value={fmt(residual, 1)} unit={residual === null ? undefined : "ppm"} />
+                <Metric label="Coverage" value={coverage} unit="μm" />
               </div>
               <div className="h-[390px] px-1 pb-3 pt-5 sm:px-4">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={spectrum} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-                    <defs>
-                      <linearGradient id="targetArea" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.18} />
-                        <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="2 5" vertical={false} />
-                    <XAxis dataKey="wavelength" type="number" domain={[0.5, 5]} tickCount={7} stroke="var(--muted-foreground)" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }} label={{ value: "WAVELENGTH (μm)", position: "insideBottom", offset: -4, fill: "var(--muted-foreground)", fontSize: 9 }} />
-                    <YAxis domain={[14550, 15000]} tickCount={6} stroke="var(--muted-foreground)" tickLine={false} axisLine={false} width={56} tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }} label={{ value: "TRANSIT DEPTH (ppm)", angle: -90, position: "insideLeft", fill: "var(--muted-foreground)", fontSize: 9 }} />
-                    <Tooltip content={<SpectrumTooltip />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
-                    <ReferenceLine x={1.4} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: "H₂O", fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
-                    <ReferenceLine x={4.28} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: "CO₂", fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
-                    <Area type="monotone" dataKey="target" fill="url(#targetArea)" stroke="none" />
-                    <Line type="monotone" dataKey="fit" stroke="var(--coral)" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "var(--coral)", stroke: "var(--background)" }} animationDuration={900} />
-                    <Line type="monotone" dataKey="target" stroke="var(--primary)" strokeWidth={1.5} dot={{ r: 2.5, fill: "var(--primary)", strokeWidth: 0 }} activeDot={{ r: 5, fill: "var(--primary)", stroke: "var(--background)" }} animationDuration={700} />
-                  </ComposedChart>
-                </ResponsiveContainer>
+                {chartData.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                      <defs>
+                        <linearGradient id="targetArea" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.18} />
+                          <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="var(--chart-grid)" strokeDasharray="2 5" vertical={false} />
+                      <XAxis dataKey="wavelength" type="number" domain={["dataMin", "dataMax"]} tickCount={7} stroke="var(--muted-foreground)" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }} label={{ value: "WAVELENGTH (μm)", position: "insideBottom", offset: -4, fill: "var(--muted-foreground)", fontSize: 9 }} />
+                      <YAxis domain={[(min: number) => Math.floor((min - 100) / 100) * 100, (max: number) => Math.ceil((max + 100) / 100) * 100]} tickCount={6} stroke="var(--muted-foreground)" tickLine={false} axisLine={false} width={56} tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }} tickFormatter={(value: number) => fmt(value)} label={{ value: "TRANSIT DEPTH (ppm)", angle: -90, position: "insideLeft", fill: "var(--muted-foreground)", fontSize: 9 }} />
+                      <Tooltip content={<SpectrumTooltip />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
+                      <ReferenceLine x={1.4} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: "H₂O", fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
+                      <ReferenceLine x={1.9} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: "H₂O", fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
+                      <Area type="monotone" dataKey="target" fill="url(#targetArea)" stroke="none" />
+                      {fitted && <Line type="monotone" dataKey="fit" name="model" stroke="var(--coral)" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "var(--coral)", stroke: "var(--background)" }} animationDuration={900} />}
+                      <Line type="monotone" dataKey="target" name="observed" stroke="var(--primary)" strokeWidth={1.5} dot={{ r: 1.5, fill: "var(--primary)", strokeWidth: 0 }} activeDot={{ r: 5, fill: "var(--primary)", stroke: "var(--background)" }} animationDuration={700} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <EmptyState>Waiting for the observation from the backend.</EmptyState>
+                )}
               </div>
             </Panel>
 
             <Panel>
               <PanelHeader icon={<Sparkles />} title="Agent Activity" eyebrow="What each agent is working on">
-                <span className="font-mono text-[10px] uppercase text-muted-foreground">Live</span>
+                <span className="font-mono text-[10px] uppercase text-muted-foreground">{isRunning ? "Live" : "Standby"}</span>
               </PanelHeader>
               <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
                 {labAgents.map(({ key, role }) => {
@@ -408,6 +485,43 @@ function Dashboard() {
             </Panel>
 
             <Panel>
+              <PanelHeader icon={<Table2 />} title="Experiments" eyebrow="Produced by the experiment runner">
+                <span className="font-mono text-[10px] uppercase text-muted-foreground">{progress?.iterations.length ?? 0} run</span>
+              </PanelHeader>
+              {progress?.iterations.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full font-mono text-[11px]">
+                    <thead className="text-[9px] uppercase text-muted-foreground">
+                      <tr className="border-b border-border">
+                        {["#", "Experiment", "H₂O", "Haze", "Baseline (ppm)", "χ²ᵣ", "RMSE (ppm)"].map((heading) => (
+                          <th key={heading} className="px-4 py-2 text-left font-normal">{heading}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {progress.iterations.map((row) => (
+                        <tr key={row.experiment_id} className={cn("border-b border-border/40 last:border-0", row.experiment_id === progress.best_experiment_id && "bg-primary/5")}>
+                          <td className="px-4 py-2 text-muted-foreground">{row.iteration}</td>
+                          <td className="px-4 py-2">
+                            {row.experiment_id}
+                            {row.experiment_id === progress.best_experiment_id && <span className="ml-2 text-[9px] uppercase text-primary">best</span>}
+                          </td>
+                          <td className="px-4 py-2">{fmt(row.h2o_abundance, 2)}</td>
+                          <td className="px-4 py-2">{fmt(row.haze_factor, 2)}</td>
+                          <td className="px-4 py-2">{fmt(row.baseline_depth * 1e6)}</td>
+                          <td className="px-4 py-2">{fmt(row.reduced_chi2, 2)}</td>
+                          <td className="px-4 py-2">{fmt(row.rmse * 1e6, 1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <EmptyState className="h-24">Experiments appear here as soon as the experiment runner produces them.</EmptyState>
+              )}
+            </Panel>
+
+            <Panel>
               <PanelHeader icon={<TerminalSquare />} title="Agent Log Stream" eyebrow={`Iteration ${iteration.toString().padStart(2, "0")}`}>
                 <div className="flex items-center gap-2 font-mono text-[10px] uppercase text-muted-foreground">
                   <span className={cn("size-1.5 rounded-full", isRunning ? "animate-pulse bg-success" : "bg-muted-foreground")} />
@@ -415,6 +529,7 @@ function Dashboard() {
                 </div>
               </PanelHeader>
               <div className="h-96 overflow-y-auto bg-terminal px-4 py-3 font-mono text-[11px] leading-6 sm:px-5" aria-live="polite">
+                {logs.length === 0 && <p className="text-muted-foreground">No agent activity yet. Start a discovery loop to stream every agent step.</p>}
                 {logs.map((line, index) => (
                   <div key={`${line.time}-${index}`} className="grid grid-cols-[64px_88px_1fr] gap-2 border-b border-border/40 py-0.5 last:border-0">
                     <span className="text-muted-foreground">{line.time}</span>
@@ -429,58 +544,76 @@ function Dashboard() {
 
           <aside className="space-y-4">
             <Panel>
-              <PanelHeader icon={<Atom />} title="Degeneracy Analysis" eyebrow="Analysis Agent">
+              <PanelHeader icon={<Atom />} title="Analysis" eyebrow="Analysis agent & orchestrator">
                 <StatusPill status={status} />
               </PanelHeader>
               <div className="space-y-5 p-4 sm:p-5">
                 <div className="flex items-start gap-3 border-l-2 border-primary bg-primary/5 px-3 py-3">
                   <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" />
                   <div>
-                    <p className="font-mono text-[10px] uppercase text-primary">Information gain</p>
-                    <p className="mt-1 text-sm leading-5 text-foreground">Next observation can reduce posterior entropy by 31%.</p>
+                    <p className="font-mono text-[10px] uppercase text-primary">Verdict{verdict?.title ? ` · ${verdict.title}` : ""}</p>
+                    <p className="mt-1 text-sm leading-5 text-foreground">{verdict?.text ?? "No verdict yet. The analysis agent reports one after each experiment."}</p>
                   </div>
                 </div>
 
                 <div>
                   <div className="mb-3 flex items-center justify-between">
-                    <h3 className="font-mono text-[10px] uppercase text-muted-foreground">Hypothesis ranking</h3>
-                    <span className="font-mono text-[10px] text-muted-foreground">P(H|D)</span>
+                    <h3 className="font-mono text-[10px] uppercase text-muted-foreground">{hypotheses.length ? "Hypothesis ranking" : "Experiments ranked by fit"}</h3>
+                    <span className="font-mono text-[10px] text-muted-foreground">{hypotheses.length ? "Confidence" : "χ²ᵣ"}</span>
                   </div>
-                  <div className="space-y-4">
-                    {hypotheses.map((hypothesis) => (
-                      <div key={hypothesis.label}>
-                        <div className="mb-1.5 flex items-end justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-medium">{hypothesis.label}</p>
-                            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{hypothesis.detail}</p>
+                  {hypotheses.length ? (
+                    <div className="space-y-4">
+                      {hypotheses.map((hypothesis) => (
+                        <div key={hypothesis.label}>
+                          <div className="mb-1.5 flex items-end justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-medium">{hypothesis.label}</p>
+                              <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{hypothesis.detail}</p>
+                            </div>
+                            <span className="font-mono text-sm font-semibold">{Math.round(hypothesis.score * 100)}%</span>
                           </div>
-                          <span className="font-mono text-sm font-semibold">{Math.round(hypothesis.score * 100)}%</span>
+                          <progress className={cn("hypothesis-progress h-1.5 w-full", scoreTone(hypothesis.tone))} value={hypothesis.score} max={1} aria-label={`${hypothesis.label} score`} />
                         </div>
-                        <progress className={cn("hypothesis-progress h-1.5 w-full", scoreTone(hypothesis.tone))} value={hypothesis.score} max={1} aria-label={`${hypothesis.label} score`} />
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : rankedExperiments.length ? (
+                    <div className="space-y-3">
+                      {rankedExperiments.map((row) => (
+                        <div key={row.experiment_id} className="flex items-end justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-medium">{row.experiment_id}</p>
+                            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                              H₂O {fmt(row.h2o_abundance, 2)} · haze {fmt(row.haze_factor, 2)} · baseline {fmt(row.baseline_depth * 1e6)} ppm
+                            </p>
+                          </div>
+                          <span className="font-mono text-sm font-semibold">{fmt(row.reduced_chi2, 2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No hypothesis tested yet.</p>
+                  )}
                 </div>
 
                 <div className="border-t border-border pt-4">
                   <div className="mb-4 flex items-center justify-between">
                     <h3 className="font-mono text-[10px] uppercase text-muted-foreground">Final report</h3>
-                    <span className="font-mono text-[10px] text-success">MD · SYNCED</span>
+                    {report && <span className="font-mono text-[10px] text-success">MD · {runId}</span>}
                   </div>
-                  <ReportMarkdown source={report} />
+                  {report ? <ReportMarkdown source={report} /> : <p className="text-sm text-muted-foreground">The orchestrator writes the report when the loop finishes.</p>}
                 </div>
               </div>
             </Panel>
 
             <Panel>
-              <PanelHeader icon={<Satellite />} title="Observation Context" eyebrow="Ephemeris locked">
-                <ChevronDown className="size-4 text-muted-foreground" />
-              </PanelHeader>
+              <PanelHeader icon={<Satellite />} title="Planet Metrics" eyebrow={metrics ? `Derived by the analysis agent · ${metrics.experiment_id}` : "Derived by the analysis agent"} />
               <dl className="grid grid-cols-2 gap-px bg-border">
-                <ContextCell label="Instrument" value="JWST / NIRSpec" />
-                <ContextCell label="Planet class" value="Hot Saturn" />
-                <ContextCell label="Equilibrium T" value="1,120 K" />
-                <ContextCell label="Surface gravity" value="4.07 m/s²" />
+                <ContextCell label="Transit S/N" value={fmt(metrics?.transit_snr, 1)} />
+                <ContextCell label="Atmosphere signal" value={metrics ? `${fmt(metrics.atmosphere.detection_significance_sigma, 1)} σ` : "—"} />
+                <ContextCell label="Rp / R*" value={fmt(metrics?.planet.rp_over_rstar, 4)} />
+                <ContextCell label="Planet radius" value={metrics ? `${fmt(metrics.planet.radius_earth, 1)} R⊕ · ${fmt(metrics.planet.radius_jupiter, 2)} R♃` : "—"} />
+                <ContextCell label="Assumed R*" value={metrics ? `${fmt(metrics.assumed_stellar_radius_rsun, 2)} R☉` : "—"} />
+                <ContextCell label="Fit p-value" value={metrics ? metrics.goodness_of_fit.p_value.toExponential(1) : "—"} />
               </dl>
             </Panel>
           </aside>
@@ -509,7 +642,11 @@ function PanelHeader({ icon, title, eyebrow, children }: { icon: React.ReactNode
   );
 }
 
-function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function EmptyState({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn("grid h-full place-items-center px-4 text-center text-sm text-muted-foreground", className)}>{children}</div>;
+}
+
+function Metric({ label, value, unit }: { label: string; value: string; unit?: string | undefined }) {
   return (
     <div className="border-r border-border px-3 py-3 last:border-r-0 sm:px-4">
       <dt className="font-mono text-[9px] uppercase text-muted-foreground">{label}</dt>
@@ -522,27 +659,29 @@ function LegendDot({ className, label }: { className: string; label: string }) {
   return <span className="flex items-center gap-1.5"><span className={cn("size-1.5 rounded-full", className)} />{label}</span>;
 }
 
-function SpectrumTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name?: string; value?: number; color?: string }>; label?: number }) {
+function SpectrumTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name?: string; value?: number; dataKey?: string }>; label?: number }) {
   if (!active || !payload?.length) return null;
+  // The observed series is drawn twice (area + line); show each series once
+  const rows = payload.filter((row, index) => row.name && payload.findIndex((other) => other.name === row.name) === index && row.name !== "target");
   return (
     <div className="min-w-40 border border-border-strong bg-popover p-3 shadow-panel">
       <p className="mb-2 font-mono text-[10px] text-muted-foreground">λ {Number(label).toFixed(2)} μm</p>
-      {payload.filter((row) => row.name !== "target" || payload.indexOf(row) !== 0).map((row, index) => (
-        <div key={`${row.name}-${index}`} className="flex items-center justify-between gap-4 text-xs">
+      {rows.map((row) => (
+        <div key={row.name} className="flex items-center justify-between gap-4 text-xs">
           <span className="capitalize text-muted-foreground">{row.name}</span>
-          <span className="font-mono text-popover-foreground">{Number(row.value).toLocaleString()} ppm</span>
+          <span className="font-mono text-popover-foreground">{fmt(row.value)} ppm</span>
         </div>
       ))}
     </div>
   );
 }
 
-function StatusPill({ status }: { status: "ready" | "running" | "complete" | "error" }) {
+function StatusPill({ status }: { status: RunStatus }) {
   const config = {
     ready: { label: "Ready", icon: FlaskConical, className: "border-border text-muted-foreground" },
     running: { label: "Analyzing", icon: RefreshCw, className: "border-primary/40 bg-primary/10 text-primary" },
-    complete: { label: "Converged", icon: CheckCircle2, className: "border-success/40 bg-success/10 text-success" },
-    error: { label: "Local result", icon: CircleAlert, className: "border-warning/40 bg-warning/10 text-warning" },
+    complete: { label: "Complete", icon: CheckCircle2, className: "border-success/40 bg-success/10 text-success" },
+    error: { label: "Failed", icon: CircleAlert, className: "border-warning/40 bg-warning/10 text-warning" },
   }[status];
   const Icon = config.icon;
   return <span className={cn("flex items-center gap-1.5 border px-2 py-1 font-mono text-[9px] uppercase", config.className)}><Icon className={cn("size-3", status === "running" && "animate-spin")} />{config.label}</span>;
@@ -551,10 +690,14 @@ function StatusPill({ status }: { status: "ready" | "running" | "complete" | "er
 function ReportMarkdown({ source }: { source: string }) {
   return (
     <div className="space-y-3 text-sm leading-6 text-muted-foreground">
-      {source.split("\n").filter(Boolean).map((line, index) => {
-        if (line.startsWith("### ")) return <h4 key={index} className="pt-1 font-display text-sm font-semibold text-foreground">{line.slice(4)}</h4>;
-        const parts = line.split(/(\*\*[^*]+\*\*)/g);
-        return <p key={index}>{parts.map((part, partIndex) => part.startsWith("**") ? <strong key={partIndex} className="font-semibold text-foreground">{part.slice(2, -2)}</strong> : part)}</p>;
+      {source.split("\n").filter((line) => line.trim()).map((line, index) => {
+        const heading = line.match(/^#{1,6}\s+(.*)/);
+        if (heading) return <h4 key={index} className="pt-1 font-display text-sm font-semibold text-foreground">{heading[1]}</h4>;
+        const bullet = line.match(/^\s*[-*]\s+(.*)/);
+        const text = bullet?.[1] ?? line;
+        const parts = text.split(/(\*\*[^*]+\*\*)/g);
+        const content = parts.map((part, partIndex) => part.startsWith("**") ? <strong key={partIndex} className="font-semibold text-foreground">{part.slice(2, -2)}</strong> : part);
+        return bullet ? <p key={index} className="pl-3 before:-ml-3 before:mr-1.5 before:content-['·']">{content}</p> : <p key={index}>{content}</p>;
       })}
     </div>
   );
