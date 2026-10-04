@@ -1,14 +1,13 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import json
 import os
 
-from backend.loop import run_discovery_loop
+from backend.orchestrator import run_discovery
 
 app = FastAPI(
     title="Exoplanet Agent Lab API",
-    description="Autonomous multi-agent discovery lab for exoplanet transmission spectroscopy and degeneracy analysis.",
-    version="1.0.0"
+    description="Autonomous multi-agent discovery lab for exoplanet transmission spectroscopy, orchestrated with Omnigent.",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -23,29 +22,23 @@ app.add_middleware(
 def read_root():
     return {
         "status": "online",
-        "message": "Welcome to the Exoplanet Agent Lab API. Use /run-discovery to start the autonomous loop."
+        "message": "Welcome to the Exoplanet Agent Lab API. Use /run-discovery to start the Omnigent discovery loop."
     }
 
 @app.post("/run-discovery")
-def trigger_discovery(max_iterations: int = 3):
+def trigger_discovery(max_iterations: int = 3, target_file: str = "data/target_spectrum.csv"):
     """
-    Triggers the autonomous multi-agent discovery loop.
-    Returns the iteration history, best fits, and the final degeneracy report.
+    Runs the Omnigent orchestrator (literature & insight → experiment runner → analysis).
+    Returns the report, ranked hypotheses, agent logs, iteration history and best-fit spectrum.
     """
-    target_file = "data/target_spectrum.csv"
     if not os.path.exists(target_file):
         raise HTTPException(
             status_code=404,
             detail="Target observation dataset not found. Please run simulator.py first."
         )
-    
+
     try:
-        best_fits, analysis_report = run_discovery_loop(target_file=target_file, max_iterations=max_iterations)
-        return {
-            "status": "success",
-            "iterations": best_fits,
-            "analysis_report": analysis_report
-        }
+        return run_discovery(target_file=target_file, max_iterations=max_iterations)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

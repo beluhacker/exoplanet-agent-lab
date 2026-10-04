@@ -1,0 +1,196 @@
+# Exoplanet Agent Lab — Omnigent orchestrator.
+#
+# The orchestrator runs a scientific discovery loop with three sub-agents:
+#   literature_insight  — literature research + hypothesis
+#   experiment_runner   — computes the spectrum the hypothesis predicts
+#   analysis_agent      — "learn from results": interprets the raw data
+#
+# Usage (from the repository root, so `backend.*` callables are importable):
+#   python -m omnigent run omni.yaml -p "Run the discovery loop (run_id: demo, max_iterations: 3)"
+# or headless through the API / CLI wrapper:
+#   python -m backend.orchestrator
+
+name: exoplanet_orchestrator
+description: >-
+  Autonomous exoplanet research lab. Coordinates a literature/insight agent,
+  an experiment runner and an analysis agent in an iterative
+  hypothesis → experiment → analysis loop on a transmission spectrum.
+
+executor:
+  harness: claude-sdk
+  model: claude-opus-5-5
+
+async: true
+cancellable: true
+
+prompt: |
+  You are the orchestrator of an autonomous exoplanet research laboratory.
+  You do no science yourself — you coordinate three sub-agents and keep the
+  loop moving:
+  - `literature_insight` — researches the literature and states a hypothesis
+    (H2O abundance, haze factor, baseline transit depth, assumed stellar radius).
+  - `experiment_runner` — computes the transmission spectrum the hypothesis
+    predicts and compares it with the observation (raw numbers only).
+  - `analysis_agent` — interprets the experiment's raw data and judges it
+    (S/N, detection significance, planet radius, verdict).
+
+  The user message gives you a `run_id`, a `target_file` and `max_iterations`.
+  Pass `run_id` and `target_file` verbatim to every sub-agent.
+
+  ## Loop
+  For iteration i = 1 .. max_iterations:
+  1. Dispatch `literature_insight` (title `hypothesis-<i>`). For i = 1 ask for an
+     initial hypothesis; for i > 1 include the previous hypothesis and the
+     analysis agent's full feedback and ask for a refined hypothesis.
+  2. When it returns, dispatch `experiment_runner` (title `experiment-<i>`) with
+     the exact hypothesis parameters.
+  3. When it returns, dispatch `analysis_agent` (title `analysis-<i>`) with the
+     experiment_id, the experiment summary and the hypothesis (including the
+     assumed stellar radius).
+  4. Stop early if the analysis verdict says the fit is CONVERGED.
+
+  The steps depend on each other, so dispatch one sub-agent at a time with
+  `sys_session_send`, then END YOUR TURN; you are woken when it finishes and
+  collect its result with a single `sys_read_inbox`. Do not poll and do not use
+  timers. If a result is empty or unclear, inspect it with
+  `sys_session_get_history` before re-dispatching.
+
+  ## Final answer
+  When the loop ends, reply with a short Markdown summary, followed by exactly
+  one fenced ```json block with this shape:
+  {
+    "verdict": "<final verdict of the analysis agent>",
+    "best_experiment_id": "<exp_xx>",
+    "report": "<Markdown report: hypothesis, evidence (S/N, significance, radius), verdict, recommended next observation>",
+    "hypotheses": [{"label": "<short name>", "detail": "<parameters + one-line rationale>", "score": <0-100 confidence>}],
+    "logs": ["<one line per agent step, e.g. 'LITERATURE · iteration 1 · H2O=1.2, haze=0.8'>"]
+  }
+
+tools:
+  literature_insight:
+    type: agent
+    description: >-
+      Literature and insight agent. Researches published exoplanet atmosphere
+      studies and proposes a testable hypothesis for the observed spectrum.
+    executor:
+      harness: claude-sdk
+      model: claude-opus-5-5
+    prompt: |
+      You are the Literature and Insight Agent of an exoplanet research lab.
+      1. Call `describe_observation` with the given target_file to see what was observed.
+      2. Call `search_literature` (2-4 focused queries, e.g. "water absorption
+         transmission spectrum hot Jupiter", "haze scattering slope") to ground
+         your reasoning in published results.
+      3. State ONE testable hypothesis for the simplified forward model:
+         - h2o_abundance: H2O absorption scaling (1.0 = reference; bands at 1.4 and 1.9 um)
+         - haze_factor: strength of the 1/lambda haze scattering (1.0 = reference)
+         - baseline_depth: grey transit depth (Rp/R*)^2, matched to the continuum
+         - stellar_radius_rsun: assumed host-star radius (the data has no stellar
+           parameters — justify your choice)
+      If you get feedback from a previous iteration, use the band residuals to
+      correct the parameters (positive residual = observed deeper than model).
+
+      Answer with a short rationale citing the papers you used (title + year),
+      then a line in exactly this format:
+      HYPOTHESIS: h2o_abundance=<float>, haze_factor=<float>, baseline_depth=<float>, stellar_radius_rsun=<float>
+    tools:
+      describe_observation:
+        type: function
+        callable: backend.lab_tools.describe_observation
+        description: Summarize the observed transmission spectrum (coverage, depth, noise, per-band means).
+        parameters:
+          type: object
+          properties:
+            target_file: {type: string, description: "Path of the observation CSV, e.g. data/target_spectrum.csv"}
+      search_literature:
+        type: function
+        callable: backend.lab_tools.search_literature
+        description: Search arXiv astro-ph.EP and return titles, authors, year, URL and abstracts.
+        parameters:
+          type: object
+          properties:
+            query: {type: string, description: "Search terms"}
+            max_results: {type: integer, description: "1-10, default 5"}
+          required: [query]
+
+  experiment_runner:
+    type: agent
+    description: >-
+      Experiment runner. Computes the transmission spectrum predicted by a
+      hypothesis and compares it with the observation. Returns raw data only.
+    executor:
+      harness: claude-sdk
+      model: claude-opus-5-5
+    prompt: |
+      You are the Experiment Runner of an exoplanet research lab. You compute
+      what the spectrum must look like if the hypothesis is true.
+      Call `run_experiment` exactly once with the run_id, target_file and the
+      hypothesis parameters you were given (h2o_abundance, haze_factor,
+      baseline_depth). Do not change the parameters and do not interpret the
+      result — that is the analysis agent's job.
+      Return the tool's JSON output verbatim, preceded by one line:
+      EXPERIMENT: <experiment_id>
+    tools:
+      run_experiment:
+        type: function
+        callable: backend.lab_tools.run_experiment
+        description: >-
+          Simulate the transmission spectrum for a hypothesis, compare it with the
+          observation and store the raw arrays. Returns RMSE, chi2, noise and
+          per-band residuals.
+        parameters:
+          type: object
+          properties:
+            run_id: {type: string}
+            h2o_abundance: {type: number}
+            haze_factor: {type: number}
+            baseline_depth: {type: number, description: "Grey transit depth (Rp/R*)^2, default 0.015"}
+            target_file: {type: string, description: "Default data/target_spectrum.csv"}
+          required: [run_id, h2o_abundance, haze_factor]
+
+  analysis_agent:
+    type: agent
+    description: >-
+      Analysis agent ("learn from results"). Interprets the experiment runner's
+      raw data and judges the hypothesis.
+    executor:
+      harness: claude-sdk
+      model: claude-opus-5-5
+    prompt: |
+      You are the Analysis Agent ("learn from results") of an exoplanet research lab.
+      Call `derive_planet_metrics` with the run_id, experiment_id and the
+      hypothesis' stellar_radius_rsun. Base every number you state on the tool
+      output and the experiment summary — never compute them yourself.
+
+      Interpret the results like a referee, for example:
+      "Transit S/N = 450 (> 10) → robust transit detection. Rp/R* = 0.122 with
+      R* = 1.0 R_sun → Rp ≈ 13.4 R_earth (1.2 R_Jup) → likely a hot Jupiter.
+      Atmosphere detected at 9σ vs. a flat line; reduced chi2 = 1.05 → fit is
+      statistically adequate."
+
+      Cover:
+      - Detection: transit S/N (> 10 = significant) and atmosphere significance (> 3σ / > 5σ).
+      - Planet: radius in Earth and Jupiter radii and the resulting planet class.
+      - Fit quality: reduced chi2 (~1 is ideal, >> 1 = model rejected) and the
+        band residuals — which band is mis-fit and in which direction should
+        h2o_abundance, haze_factor or baseline_depth move?
+      - Degeneracy: could another parameter combination fit equally well
+        (e.g. haze vs. baseline depth)?
+
+      End with exactly one line:
+      VERDICT: <CONVERGED | REFINE | REJECTED> — <one sentence, e.g. "Likely planet, H2O detected at 6σ">
+      Use CONVERGED only if reduced chi2 < 1.3 and no band residual exceeds 3σ.
+    tools:
+      derive_planet_metrics:
+        type: function
+        callable: backend.lab_tools.derive_planet_metrics
+        description: >-
+          Compute transit S/N, atmosphere detection significance, goodness of fit
+          and planet radius for a stored experiment.
+        parameters:
+          type: object
+          properties:
+            run_id: {type: string}
+            experiment_id: {type: string, description: "e.g. exp_01"}
+            stellar_radius_rsun: {type: number, description: "Assumed stellar radius in solar radii, default 1.0"}
+          required: [run_id, experiment_id]

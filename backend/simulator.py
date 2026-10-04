@@ -1,16 +1,16 @@
 import numpy as np
 import os
 
-def simulate_transmission_spectrum(wavelengths, h2o_abund=1.0, haze_factor=1.0):
+def simulate_transmission_spectrum(wavelengths, h2o_abund=1.0, haze_factor=1.0, baseline_depth=0.015):
     """
     Simulates a simplified exoplanet transmission spectrum.
-    
+
     Parameters:
     - wavelengths: Array of wavelengths in micrometers (um)
     - h2o_abund: Scaling factor for water abundance
     - haze_factor: Strength of the aerosol/haze layer
+    - baseline_depth: Grey transit depth (Rp/R*)^2, default 1.5%
     """
-    baseline_depth = 0.015  # 1.5% baseline transit depth
     atm_scale = 0.0008
     
     # H2O absorption bands around ~1.4 um and ~1.9 um

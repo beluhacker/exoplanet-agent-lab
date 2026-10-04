@@ -1,7 +1,9 @@
 numpy
 scipy
 matplotlib
-anthropic
 fastapi
 uvicorn
 python-dotenv
+httpx
+omnigent[claude-sdk]>=0.16
+omnigent-client>=0.16
