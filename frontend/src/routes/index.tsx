@@ -53,7 +53,14 @@ type IterationRow = {
   iteration: number;
   experiment_id: string;
   h2o_abundance: number;
+<<<<<<< Updated upstream
   haze_factor: number;
+=======
+  co2_abundance?: number;
+  ch4_abundance?: number;
+  haze_factor: number;
+  haze_slope?: number;
+>>>>>>> Stashed changes
   baseline_depth: number;
   rmse: number;
   reduced_chi2: number;
@@ -66,6 +73,10 @@ type PlanetMetrics = {
   atmosphere: { detection_significance_sigma: number; delta_chi2_vs_flat: number };
   goodness_of_fit: { reduced_chi2: number; p_value: number };
   planet: { rp_over_rstar: number; radius_earth: number; radius_jupiter: number };
+<<<<<<< Updated upstream
+=======
+  molecules?: Record<string, { abundance: number; detection_significance_sigma: number }>;
+>>>>>>> Stashed changes
 };
 
 type Progress = {
@@ -444,7 +455,13 @@ function Dashboard() {
                       <YAxis domain={[(min: number) => Math.floor((min - 100) / 100) * 100, (max: number) => Math.ceil((max + 100) / 100) * 100]} tickCount={6} stroke="var(--muted-foreground)" tickLine={false} axisLine={false} width={56} tick={{ fontSize: 10, fontFamily: "var(--font-mono)" }} tickFormatter={(value: number) => fmt(value)} label={{ value: "TRANSIT DEPTH (ppm)", angle: -90, position: "insideLeft", fill: "var(--muted-foreground)", fontSize: 9 }} />
                       <Tooltip content={<SpectrumTooltip />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "3 3" }} />
                       <ReferenceLine x={1.4} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: "H₂O", fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
+<<<<<<< Updated upstream
                       <ReferenceLine x={1.9} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: "H₂O", fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
+=======
+                      {[{ x: 1.9, label: "H₂O" }, { x: 2.7, label: "H₂O" }, { x: 3.3, label: "CH₄" }, { x: 4.3, label: "CO₂" }].map(({ x, label }) => (
+                        <ReferenceLine key={x} x={x} stroke="var(--border-strong)" strokeDasharray="2 4" label={{ value: label, fill: "var(--muted-foreground)", fontSize: 9, position: "top" }} />
+                      ))}
+>>>>>>> Stashed changes
                       <Area type="monotone" dataKey="target" fill="url(#targetArea)" stroke="none" />
                       {fitted && <Line type="monotone" dataKey="fit" name="model" stroke="var(--coral)" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "var(--coral)", stroke: "var(--background)" }} animationDuration={900} />}
                       <Line type="monotone" dataKey="target" name="observed" stroke="var(--primary)" strokeWidth={1.5} dot={{ r: 1.5, fill: "var(--primary)", strokeWidth: 0 }} activeDot={{ r: 5, fill: "var(--primary)", stroke: "var(--background)" }} animationDuration={700} />
@@ -493,7 +510,11 @@ function Dashboard() {
                   <table className="w-full font-mono text-[11px]">
                     <thead className="text-[9px] uppercase text-muted-foreground">
                       <tr className="border-b border-border">
+<<<<<<< Updated upstream
                         {["#", "Experiment", "H₂O", "Haze", "Baseline (ppm)", "χ²ᵣ", "RMSE (ppm)"].map((heading) => (
+=======
+                        {["#", "Experiment", "H₂O", "CO₂", "CH₄", "Haze", "Slope", "Baseline (ppm)", "χ²ᵣ", "RMSE (ppm)"].map((heading) => (
+>>>>>>> Stashed changes
                           <th key={heading} className="px-4 py-2 text-left font-normal">{heading}</th>
                         ))}
                       </tr>
@@ -507,7 +528,14 @@ function Dashboard() {
                             {row.experiment_id === progress.best_experiment_id && <span className="ml-2 text-[9px] uppercase text-primary">best</span>}
                           </td>
                           <td className="px-4 py-2">{fmt(row.h2o_abundance, 2)}</td>
+<<<<<<< Updated upstream
                           <td className="px-4 py-2">{fmt(row.haze_factor, 2)}</td>
+=======
+                          <td className="px-4 py-2">{fmt(row.co2_abundance ?? 0, 2)}</td>
+                          <td className="px-4 py-2">{fmt(row.ch4_abundance ?? 0, 2)}</td>
+                          <td className="px-4 py-2">{fmt(row.haze_factor, 2)}</td>
+                          <td className="px-4 py-2">{fmt(row.haze_slope ?? 1, 1)}</td>
+>>>>>>> Stashed changes
                           <td className="px-4 py-2">{fmt(row.baseline_depth * 1e6)}</td>
                           <td className="px-4 py-2">{fmt(row.reduced_chi2, 2)}</td>
                           <td className="px-4 py-2">{fmt(row.rmse * 1e6, 1)}</td>
@@ -583,7 +611,11 @@ function Dashboard() {
                           <div>
                             <p className="text-sm font-medium">{row.experiment_id}</p>
                             <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+<<<<<<< Updated upstream
                               H₂O {fmt(row.h2o_abundance, 2)} · haze {fmt(row.haze_factor, 2)} · baseline {fmt(row.baseline_depth * 1e6)} ppm
+=======
+                              H₂O {fmt(row.h2o_abundance, 2)} · CO₂ {fmt(row.co2_abundance ?? 0, 2)} · CH₄ {fmt(row.ch4_abundance ?? 0, 2)} · haze {fmt(row.haze_factor, 1)} (λ^-{fmt(row.haze_slope ?? 1, 1)})
+>>>>>>> Stashed changes
                             </p>
                           </div>
                           <span className="font-mono text-sm font-semibold">{fmt(row.reduced_chi2, 2)}</span>
@@ -614,6 +646,17 @@ function Dashboard() {
                 <ContextCell label="Planet radius" value={metrics ? `${fmt(metrics.planet.radius_earth, 1)} R⊕ · ${fmt(metrics.planet.radius_jupiter, 2)} R♃` : "—"} />
                 <ContextCell label="Assumed R*" value={metrics ? `${fmt(metrics.assumed_stellar_radius_rsun, 2)} R☉` : "—"} />
                 <ContextCell label="Fit p-value" value={metrics ? metrics.goodness_of_fit.p_value.toExponential(1) : "—"} />
+<<<<<<< Updated upstream
+=======
+                <div className="col-span-2 bg-card px-4 py-3">
+                  <dt className="font-mono text-[9px] uppercase text-muted-foreground">Molecule detection (fit without molecule)</dt>
+                  <dd className="mt-1 text-xs text-foreground">
+                    {metrics?.molecules
+                      ? Object.entries(metrics.molecules).map(([name, molecule]) => `${name} ${fmt(molecule.detection_significance_sigma, 1)} σ`).join(" · ")
+                      : "—"}
+                  </dd>
+                </div>
+>>>>>>> Stashed changes
               </dl>
             </Panel>
           </aside>

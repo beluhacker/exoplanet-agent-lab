@@ -14,6 +14,10 @@ from pathlib import Path
 
 import numpy as np
 from scipy import stats
+<<<<<<< Updated upstream
+=======
+from scipy.ndimage import median_filter
+>>>>>>> Stashed changes
 
 from backend.simulator import simulate_transmission_spectrum, evaluate_fit
 
@@ -29,9 +33,25 @@ BANDS = {
     "optical_haze_0.4-1.2": (0.0, 1.2),
     "h2o_1.4_band_1.2-1.6": (1.2, 1.6),
     "h2o_1.9_band_1.6-2.2": (1.6, 2.2),
+<<<<<<< Updated upstream
     "continuum_2.2+": (2.2, 99.0),
 }
 
+=======
+    "continuum_2.2-2.5": (2.2, 2.5),
+    "h2o_2.7_band_2.5-2.9": (2.5, 2.9),
+    "continuum_2.9-3.1": (2.9, 3.1),
+    "ch4_3.3_band_3.1-3.5": (3.1, 3.5),
+    "continuum_3.5-4.1": (3.5, 4.1),
+    "co2_4.3_band_4.1-4.5": (4.1, 4.5),
+    "continuum_4.5+": (4.5, 99.0),
+}
+
+# Free parameters of the forward model (for the degrees of freedom)
+N_MODEL_PARAMS = 6
+OUTLIER_SIGMA = 5.0
+
+>>>>>>> Stashed changes
 
 def _load_target(target_file):
     data = np.loadtxt(REPO_ROOT / target_file, delimiter=",", skiprows=1)
@@ -43,6 +63,31 @@ def _noise_estimate(values):
     return float(np.std(np.diff(values), ddof=1) / np.sqrt(2))
 
 
+<<<<<<< Updated upstream
+=======
+def _outlier_mask(values):
+    """
+    True for single points that jump more than OUTLIER_SIGMA away from the
+    median of their neighbours (robust scatter), e.g. detector glitches.
+    Real spectral features span several points and are not flagged.
+    """
+    robust_noise = 1.4826 * np.median(np.abs(np.diff(values))) / np.sqrt(2)
+    if robust_noise == 0:
+        return np.zeros(len(values), dtype=bool)
+    deviation = values - median_filter(values, size=5, mode="nearest")
+    return np.abs(deviation) > OUTLIER_SIGMA * robust_noise
+
+
+def _load_clean_target(target_file):
+    """Observation with outliers removed, plus the removed points."""
+    wavelengths, depth = _load_target(target_file)
+    outliers = _outlier_mask(depth)
+    removed = [{"wavelength_um": round(float(w), 4), "transit_depth": round(float(d), 7)}
+               for w, d in zip(wavelengths[outliers], depth[outliers])]
+    return wavelengths[~outliers], depth[~outliers], removed
+
+
+>>>>>>> Stashed changes
 def _safe_id(value):
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(value)) or "default"
 
@@ -55,7 +100,11 @@ def _run_dir(run_id):
 
 def describe_observation(target_file: str = DEFAULT_TARGET) -> str:
     """Summarize the observed transmission spectrum (coverage, depth, noise, features)."""
+<<<<<<< Updated upstream
     wavelengths, depth = _load_target(target_file)
+=======
+    wavelengths, depth, outliers = _load_clean_target(target_file)
+>>>>>>> Stashed changes
     sigma = _noise_estimate(depth)
     band_means = {
         name: round(float(depth[(wavelengths >= lo) & (wavelengths < hi)].mean()), 7)
@@ -71,6 +120,10 @@ def describe_observation(target_file: str = DEFAULT_TARGET) -> str:
         "max_transit_depth": round(float(depth.max()), 7),
         "per_point_noise_estimate": round(sigma, 7),
         "mean_depth_per_band": band_means,
+<<<<<<< Updated upstream
+=======
+        "outliers_excluded": outliers,
+>>>>>>> Stashed changes
         "stellar_parameters": "unknown — not contained in the dataset",
     }, indent=2)
 
@@ -112,17 +165,42 @@ def run_experiment(
     haze_factor: float,
     baseline_depth: float = 0.015,
     target_file: str = DEFAULT_TARGET,
+<<<<<<< Updated upstream
 ) -> str:
     """Simulate the spectrum predicted by a hypothesis and compare it with the observation."""
     wavelengths, observed = _load_target(target_file)
     model = simulate_transmission_spectrum(
         wavelengths, h2o_abund=float(h2o_abundance), haze_factor=float(haze_factor),
         baseline_depth=float(baseline_depth),
+=======
+    co2_abundance: float = 0.0,
+    ch4_abundance: float = 0.0,
+    haze_slope: float = 1.0,
+) -> str:
+    """Simulate the spectrum predicted by a hypothesis and compare it with the observation."""
+    wavelengths, observed, outliers = _load_clean_target(target_file)
+    hypothesis = {
+        "h2o_abundance": float(h2o_abundance),
+        "haze_factor": float(haze_factor),
+        "haze_slope": float(haze_slope),
+        "co2_abundance": float(co2_abundance),
+        "ch4_abundance": float(ch4_abundance),
+        "baseline_depth": float(baseline_depth),
+    }
+    model = simulate_transmission_spectrum(
+        wavelengths, h2o_abund=hypothesis["h2o_abundance"], haze_factor=hypothesis["haze_factor"],
+        baseline_depth=hypothesis["baseline_depth"], co2_abund=hypothesis["co2_abundance"],
+        ch4_abund=hypothesis["ch4_abundance"], haze_slope=hypothesis["haze_slope"],
+>>>>>>> Stashed changes
     )
     residuals = observed - model
     sigma = _noise_estimate(observed)
     chi2 = float(np.sum((residuals / sigma) ** 2))
+<<<<<<< Updated upstream
     dof = len(observed) - 3
+=======
+    dof = len(observed) - N_MODEL_PARAMS
+>>>>>>> Stashed changes
 
     band_residuals = {}
     for name, (lo, hi) in BANDS.items():
@@ -139,12 +217,18 @@ def run_experiment(
     raw = {
         "run_id": _safe_id(run_id),
         "experiment_id": experiment_id,
+<<<<<<< Updated upstream
         "hypothesis": {
             "h2o_abundance": float(h2o_abundance),
             "haze_factor": float(haze_factor),
             "baseline_depth": float(baseline_depth),
         },
         "target_file": target_file,
+=======
+        "hypothesis": hypothesis,
+        "target_file": target_file,
+        "outliers_excluded": outliers,
+>>>>>>> Stashed changes
         "rmse": float(evaluate_fit(model, observed)),
         "chi2": chi2,
         "dof": dof,
@@ -190,6 +274,30 @@ def derive_planet_metrics(run_id: str, experiment_id: str, stellar_radius_rsun: 
     feature_amplitude = float(model.max() - model.min())
     feature_snr = feature_amplitude / sigma
 
+<<<<<<< Updated upstream
+=======
+    # Per-molecule evidence: how much worse does the fit get without that molecule?
+    hypothesis = raw["hypothesis"]
+    wavelengths = np.array(raw["wavelength_um"])
+    molecules = {}
+    for molecule, key in (("H2O", "h2o_abundance"), ("CO2", "co2_abundance"), ("CH4", "ch4_abundance")):
+        if not hypothesis.get(key):
+            molecules[molecule] = {"abundance": hypothesis.get(key, 0.0), "detection_significance_sigma": 0.0}
+            continue
+        params = {**hypothesis, key: 0.0}
+        without = simulate_transmission_spectrum(
+            wavelengths, h2o_abund=params["h2o_abundance"], haze_factor=params["haze_factor"],
+            baseline_depth=params["baseline_depth"], co2_abund=params.get("co2_abundance", 0.0),
+            ch4_abund=params.get("ch4_abundance", 0.0), haze_slope=params.get("haze_slope", 1.0),
+        )
+        delta = float(np.sum(((observed - without) / sigma) ** 2)) - chi2_model
+        molecules[molecule] = {
+            "abundance": hypothesis[key],
+            "delta_chi2_without": round(delta, 1),
+            "detection_significance_sigma": round(float(np.sqrt(max(delta, 0.0))), 1),
+        }
+
+>>>>>>> Stashed changes
     baseline_depth = raw["hypothesis"]["baseline_depth"]
     rp_rs = float(np.sqrt(baseline_depth))
     rp_earth = rp_rs * float(stellar_radius_rsun) * R_SUN_IN_R_EARTH
@@ -209,6 +317,11 @@ def derive_planet_metrics(run_id: str, experiment_id: str, stellar_radius_rsun: 
             "feature_amplitude": round(feature_amplitude, 7),
             "feature_snr_per_point": round(feature_snr, 2),
         },
+<<<<<<< Updated upstream
+=======
+        "molecules": molecules,
+        "outliers_excluded": raw.get("outliers_excluded", []),
+>>>>>>> Stashed changes
         "goodness_of_fit": {
             "reduced_chi2": round(raw["reduced_chi2"], 3),
             "p_value": p_model,

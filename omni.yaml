@@ -28,7 +28,12 @@ prompt: |
   You do no science yourself — you coordinate three sub-agents and keep the
   loop moving:
   - `literature_insight` — researches the literature and states a hypothesis
+<<<<<<< Updated upstream
     (H2O abundance, haze factor, baseline transit depth, assumed stellar radius).
+=======
+    (H2O, CO2 and CH4 abundances, haze strength and slope, baseline transit
+    depth, assumed stellar radius).
+>>>>>>> Stashed changes
   - `experiment_runner` — computes the transmission spectrum the hypothesis
     predicts and compares it with the observation (raw numbers only).
   - `analysis_agent` — interprets the experiment's raw data and judges it
@@ -89,9 +94,23 @@ tools:
          transmission spectrum hot Jupiter", "haze scattering slope") to ground
          your reasoning in published results.
       3. State ONE testable hypothesis for the simplified forward model:
+<<<<<<< Updated upstream
          - h2o_abundance: H2O absorption scaling (1.0 = reference; bands at 1.4 and 1.9 um)
          - haze_factor: strength of the 1/lambda haze scattering (1.0 = reference)
          - baseline_depth: grey transit depth (Rp/R*)^2, matched to the continuum
+=======
+         - h2o_abundance: H2O absorption scaling (1.0 = reference; bands at 1.4, 1.9 and 2.7 um)
+         - co2_abundance: CO2 absorption scaling (band at 4.3 um; 0 = absent)
+         - ch4_abundance: CH4 absorption scaling (band at 3.3 um; 0 = absent)
+         - haze_factor: haze strength, normalized at 1 um (1.0 = reference; a steep
+           slope needs a larger factor, e.g. 10-30 for slope 4)
+         - haze_slope: haze power-law index, depth ~ lambda^-slope (1 = flat haze,
+           4 = Rayleigh scattering); set it from the blue-end rise
+         - baseline_depth: grey transit depth (Rp/R*)^2, matched to the continuum
+         Use the per-band means of `describe_observation` (and the band residuals
+         in feedback) to decide which molecules are present: a band clearly above
+         the neighbouring continuum suggests that molecule.
+>>>>>>> Stashed changes
          - stellar_radius_rsun: assumed host-star radius (the data has no stellar
            parameters — justify your choice)
       If you get feedback from a previous iteration, use the band residuals to
@@ -99,7 +118,11 @@ tools:
 
       Answer with a short rationale citing the papers you used (title + year),
       then a line in exactly this format:
+<<<<<<< Updated upstream
       HYPOTHESIS: h2o_abundance=<float>, haze_factor=<float>, baseline_depth=<float>, stellar_radius_rsun=<float>
+=======
+      HYPOTHESIS: h2o_abundance=<float>, co2_abundance=<float>, ch4_abundance=<float>, haze_factor=<float>, haze_slope=<float>, baseline_depth=<float>, stellar_radius_rsun=<float>
+>>>>>>> Stashed changes
     tools:
       describe_observation:
         type: function
@@ -134,8 +157,13 @@ tools:
       The lab dashboard streams your messages live: before the tool call,
       write one short sentence naming the parameters you are about to test.
       Call `run_experiment` exactly once with the run_id, target_file and the
+<<<<<<< Updated upstream
       hypothesis parameters you were given (h2o_abundance, haze_factor,
       baseline_depth). Do not change the parameters and do not interpret the
+=======
+      hypothesis parameters you were given (h2o_abundance, co2_abundance,
+      ch4_abundance, haze_factor, haze_slope, baseline_depth). Do not change the parameters and do not interpret the
+>>>>>>> Stashed changes
       result — that is the analysis agent's job.
       Return the tool's JSON output verbatim, preceded by one line:
       EXPERIMENT: <experiment_id>
@@ -153,6 +181,12 @@ tools:
             run_id: {type: string}
             h2o_abundance: {type: number}
             haze_factor: {type: number}
+<<<<<<< Updated upstream
+=======
+            haze_slope: {type: number, description: "Haze power-law index (depth ~ lambda^-slope), default 1"}
+            co2_abundance: {type: number, description: "CO2 scaling (4.3 um band), default 0"}
+            ch4_abundance: {type: number, description: "CH4 scaling (3.3 um band), default 0"}
+>>>>>>> Stashed changes
             baseline_depth: {type: number, description: "Grey transit depth (Rp/R*)^2, default 0.015"}
             target_file: {type: string, description: "Default data/target_spectrum.csv"}
           required: [run_id, h2o_abundance, haze_factor]
@@ -181,10 +215,21 @@ tools:
 
       Cover:
       - Detection: transit S/N (> 10 = significant) and atmosphere significance (> 3σ / > 5σ).
+<<<<<<< Updated upstream
       - Planet: radius in Earth and Jupiter radii and the resulting planet class.
       - Fit quality: reduced chi2 (~1 is ideal, >> 1 = model rejected) and the
         band residuals — which band is mis-fit and in which direction should
         h2o_abundance, haze_factor or baseline_depth move?
+=======
+      - Molecules: for H2O, CO2 and CH4 report the detection significance from
+        `molecules` (> 3σ = evidence, > 5σ = detection) and say which are present.
+      - Outliers: mention any points listed in `outliers_excluded`.
+      - Planet: radius in Earth and Jupiter radii and the resulting planet class.
+      - Fit quality: reduced chi2 (~1 is ideal, >> 1 = model rejected) and the
+        band residuals — which band is mis-fit and in which direction should
+        h2o_abundance, co2_abundance, ch4_abundance, haze_factor, haze_slope or
+        baseline_depth move?
+>>>>>>> Stashed changes
       - Degeneracy: could another parameter combination fit equally well
         (e.g. haze vs. baseline depth)?
 

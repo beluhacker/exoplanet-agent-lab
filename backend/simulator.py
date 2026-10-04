@@ -1,12 +1,22 @@
 import numpy as np
 import os
 
+<<<<<<< Updated upstream
 def simulate_transmission_spectrum(wavelengths, h2o_abund=1.0, haze_factor=1.0, baseline_depth=0.015):
+=======
+def _band(wavelengths, center, width):
+    return np.exp(-((wavelengths - center) / width)**2)
+
+
+def simulate_transmission_spectrum(wavelengths, h2o_abund=1.0, haze_factor=1.0, baseline_depth=0.015,
+                                   co2_abund=0.0, ch4_abund=0.0, haze_slope=1.0):
+>>>>>>> Stashed changes
     """
     Simulates a simplified exoplanet transmission spectrum.
 
     Parameters:
     - wavelengths: Array of wavelengths in micrometers (um)
+<<<<<<< Updated upstream
     - h2o_abund: Scaling factor for water abundance
     - haze_factor: Strength of the aerosol/haze layer
     - baseline_depth: Grey transit depth (Rp/R*)^2, default 1.5%
@@ -23,6 +33,32 @@ def simulate_transmission_spectrum(wavelengths, h2o_abund=1.0, haze_factor=1.0, 
     haze_scattering = haze_factor * (0.003 / wavelengths)
     
     transit_depth = baseline_depth + atm_scale * (absorption_h2o + haze_scattering)
+=======
+    - h2o_abund: Scaling factor for water abundance (bands at 1.4, 1.9 and 2.7 um)
+    - haze_factor: Strength of the aerosol/haze layer
+    - baseline_depth: Grey transit depth (Rp/R*)^2, default 1.5%
+    - co2_abund: Scaling factor for CO2 (band at 4.3 um), 0 = absent
+    - ch4_abund: Scaling factor for CH4 (band at 3.3 um), 0 = absent
+    - haze_slope: Power-law index of the haze, depth ~ lambda^-slope
+      (1 = the original 1/lambda haze, 4 = Rayleigh scattering)
+    """
+    wavelengths = np.asarray(wavelengths, dtype=float)
+    atm_scale = 0.0008
+
+    # H2O absorption bands around ~1.4, ~1.9 and ~2.7 um
+    absorption_h2o = h2o_abund * (
+        0.4 * _band(wavelengths, 1.4, 0.12) +
+        0.6 * _band(wavelengths, 1.9, 0.18) +
+        0.8 * _band(wavelengths, 2.7, 0.15)
+    )
+    absorption_co2 = co2_abund * _band(wavelengths, 4.3, 0.12)
+    absorption_ch4 = ch4_abund * 0.7 * _band(wavelengths, 3.3, 0.12)
+
+    # Aerosol/haze scattering (blue-end scattering), normalized at 1 um
+    haze_scattering = haze_factor * 0.003 * wavelengths ** (-haze_slope)
+
+    transit_depth = baseline_depth + atm_scale * (absorption_h2o + absorption_co2 + absorption_ch4 + haze_scattering)
+>>>>>>> Stashed changes
     return transit_depth
 
 def generate_target_observation():
